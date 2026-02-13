@@ -316,12 +316,6 @@ app.get('/occupancy', async (req, res) => {
     return;
   }
 
-  const floorplan = await prisma.floorplan.findUnique({ where: { id: floorplanId } });
-  if (!floorplan) {
-    res.status(404).json({ error: 'not_found', message: 'Floorplan not found' });
-    return;
-  }
-
   const desks = await prisma.desk.findMany({
     where: { floorplanId },
     orderBy: { createdAt: 'asc' }
@@ -361,6 +355,7 @@ app.get('/occupancy', async (req, res) => {
         y: desk.y,
         status: 'booked' as const,
         booking: {
+          id: single.id,
           userEmail: single.userEmail,
           type: 'single' as const
         }
@@ -376,6 +371,7 @@ app.get('/occupancy', async (req, res) => {
         y: desk.y,
         status: 'booked' as const,
         booking: {
+          id: recurring.id,
           userEmail: recurring.userEmail,
           type: 'recurring' as const
         }

@@ -8,7 +8,7 @@ type OccupancyDesk = {
   x: number;
   y: number;
   status: 'free' | 'booked';
-  booking: { userEmail: string; type: 'single' | 'recurring' } | null;
+  booking: { id?: string; userEmail: string; type: 'single' | 'recurring' } | null;
 };
 type OccupancyResponse = { date: string; floorplanId: string; desks: OccupancyDesk[]; people: { userEmail: string }[] };
 type AdminBooking = {
@@ -33,7 +33,6 @@ const weekdays = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Fr
 export function App() {
   const [floorplans, setFloorplans] = useState<Floorplan[]>([]);
   const [selectedFloorplanId, setSelectedFloorplanId] = useState('');
-  const [selectedFloorplan, setSelectedFloorplan] = useState<Floorplan | null>(null);
   const [selectedDate, setSelectedDate] = useState(today);
   const [occupancy, setOccupancy] = useState<OccupancyResponse | null>(null);
   const [selectedDeskId, setSelectedDeskId] = useState('');
@@ -61,6 +60,10 @@ export function App() {
   const [editBookingDate, setEditBookingDate] = useState('');
 
   const adminHeaders = useMemo(() => (adminToken ? { Authorization: `Bearer ${adminToken}` } : undefined), [adminToken]);
+  const selectedFloorplan = useMemo(
+    () => floorplans.find((floorplan) => floorplan.id === selectedFloorplanId) ?? null,
+    [floorplans, selectedFloorplanId]
+  );
   const desks = occupancy?.desks ?? [];
   const selectedDesk = useMemo(() => desks.find((desk) => desk.id === selectedDeskId) ?? null, [desks, selectedDeskId]);
   const people = occupancy?.people ?? [];
@@ -88,11 +91,7 @@ export function App() {
 
   const loadOccupancy = async (floorplanId: string, date: string) => {
     try {
-      const [floorplan, occupancyData] = await Promise.all([
-        get<Floorplan>(`/floorplans/${floorplanId}`),
-        get<OccupancyResponse>(`/occupancy?floorplanId=${floorplanId}&date=${date}`)
-      ]);
-      setSelectedFloorplan(floorplan);
+      const occupancyData = await get<OccupancyResponse>(`/occupancy?floorplanId=${floorplanId}&date=${date}`);
       setOccupancy(occupancyData);
       setSelectedDeskId((prev) => (occupancyData.desks.some((desk) => desk.id === prev) ? prev : ''));
     } catch (error) {
@@ -178,7 +177,6 @@ export function App() {
       await loadFloorplans();
       if (selectedFloorplanId === id) {
         setSelectedFloorplanId('');
-        setSelectedFloorplan(null);
         setOccupancy(null);
       }
     } catch (error) {
