@@ -1,4 +1,5 @@
-import { FormEvent, MouseEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, MouseEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { API_BASE, ApiError, del, get, patch, post } from './api';
 
 type Floorplan = { id: string; name: string; imageUrl: string; createdAt: string };
@@ -29,7 +30,7 @@ type AdminRecurringBooking = {
 type MeResponse = { email: string };
 
 const today = new Date().toISOString().slice(0, 10);
-const weekdays = ['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'];
+const weekdays = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
 const weekdayNames = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
 
 const toDateKey = (value: Date): string => value.toISOString().slice(0, 10);
@@ -42,7 +43,7 @@ const startOfMonth = (dateString: string): Date => {
 };
 
 const buildCalendarDays = (monthStart: Date): Date[] => {
-  const firstWeekday = monthStart.getUTCDay();
+  const firstWeekday = (monthStart.getUTCDay() + 6) % 7;
   const gridStart = new Date(monthStart);
   gridStart.setUTCDate(1 - firstWeekday);
 
@@ -60,6 +61,9 @@ export function App() {
   const [visibleMonth, setVisibleMonth] = useState(startOfMonth(today));
   const [occupancy, setOccupancy] = useState<OccupancyResponse | null>(null);
   const [activeDeskId, setActiveDeskId] = useState('');
+  const [popupAnchor, setPopupAnchor] = useState<{ left: number; top: number } | null>(null);
+  const [popupPosition, setPopupPosition] = useState<{ left: number; top: number } | null>(null);
+  const popupRef = useRef<HTMLDivElement | null>(null);
 
   const [userEmail, setUserEmail] = useState('demo@example.com');
   const [addToCalendar, setAddToCalendar] = useState(false);
@@ -90,7 +94,10 @@ export function App() {
   );
   const desks = occupancy?.desks ?? [];
   const activeDesk = useMemo(() => desks.find((desk) => desk.id === activeDeskId) ?? null, [desks, activeDeskId]);
-  const people = occupancy?.people ?? [];
+  const people = useMemo(() => {
+    const source = occupancy?.people ?? [];
+    return [...new Set(source.map((person) => person.userEmail))].sort((a, b) => a.localeCompare(b, 'de'));
+  }, [occupancy]);
   const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
 
   const handleApiError = (error: unknown) => {
@@ -159,6 +166,39 @@ export function App() {
       loadOccupancy(selectedFloorplanId, selectedDate);
     }
   }, [selectedFloorplanId, selectedDate]);
+
+  useEffect(() => {
+    setActiveDeskId('');
+    setPopupAnchor(null);
+    setPopupPosition(null);
+  }, [selectedDate, selectedFloorplanId]);
+
+  useLayoutEffect(() => {
+    if (!popupAnchor || !popupRef.current) {
+      setPopupPosition(popupAnchor);
+      return;
+    }
+    const margin = 10;
+    const { width, height } = popupRef.current.getBoundingClientRect();
+    const maxLeft = window.innerWidth - width - margin;
+    const maxTop = window.innerHeight - height - margin;
+    setPopupPosition({
+      left: Math.min(Math.max(popupAnchor.left, margin), Math.max(maxLeft, margin)),
+      top: Math.min(Math.max(popupAnchor.top, margin), Math.max(maxTop, margin))
+    });
+  }, [popupAnchor, activeDeskId]);
+
+  useEffect(() => {
+    if (!activeDeskId) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setActiveDeskId('');
+        setPopupAnchor(null);
+      }
+    };
+    window.addEventListener('keydown', onEscape);
+    return () => window.removeEventListener('keydown', onEscape);
+  }, [activeDeskId]);
 
   useEffect(() => {
     if (isAdminMode) {
@@ -255,6 +295,7 @@ export function App() {
     try {
       await post('/bookings', { deskId: activeDesk.id, userEmail, date: selectedDate });
       setActiveDeskId('');
+      setPopupAnchor(null);
       setAddToCalendar(false);
       await loadOccupancy(selectedFloorplanId, selectedDate);
       if (isAdminMode) await loadAdminLists();
@@ -362,15 +403,6 @@ export function App() {
               </div>
             </section>
 
-            <section>
-              <h3>Wer ist im Büro?</h3>
-              <p className="muted">{selectedDate}</p>
-              {!people.length ? <p className="muted">Niemand gebucht.</p> : (
-                <ul className="people-list">
-                  {people.map((person) => <li key={person.userEmail}>{person.userEmail}</li>)}
-                </ul>
-              )}
-            </section>
           </aside>
 
           <section className="card canvas-card">
@@ -390,37 +422,40 @@ export function App() {
                       onClick={(event) => {
                         event.stopPropagation();
                         setActiveDeskId(desk.id);
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setPopupAnchor({ left: rect.left + rect.width + 10, top: rect.top });
                       }}
                       style={{ left: `${desk.x * 100}%`, top: `${desk.y * 100}%` }}
-                      title={`${desk.name} - ${desk.status === 'free' ? 'frei' : `belegt durch ${desk.booking?.userEmail}`}`}
+                      title={`${desk.name}\nStatus: ${desk.status === 'free' ? 'frei' : 'belegt'}${desk.booking?.userEmail ? `\n${desk.booking.userEmail}` : ''}`}
                     />
                   ))}
-
-                  {!isAdminMode && activeDesk && (
-                    <div className="booking-overlay card" style={{ left: `${activeDesk.x * 100}%`, top: `${activeDesk.y * 100}%` }}>
-                      <h3>{activeDesk.name}</h3>
-                      <p className="muted">{selectedDate}</p>
-                      {activeDesk.status === 'free' ? (
-                        <form onSubmit={createSingleBooking} className="form-grid">
-                          <input value={userEmail} onChange={(e) => setUserEmail(e.target.value)} placeholder="E-Mail" />
-                          <label className="checkbox-row">
-                            <input type="checkbox" checked={addToCalendar} onChange={(e) => setAddToCalendar(e.target.checked)} />
-                            Zum Kalender hinzufügen
-                          </label>
-                          <button className="btn btn-primary" type="submit">Buchen</button>
-                        </form>
-                      ) : (
-                        <p className="muted">Gebucht von {activeDesk.booking?.userEmail}</p>
-                      )}
-                      <button className="btn btn-secondary" onClick={() => setActiveDeskId('')}>Schließen</button>
-                    </div>
-                  )}
                 </div>
               </>
             )}
           </section>
 
-          <aside className="right-panel">
+          <aside className="right-panel sticky-sidebar">
+            <section className="card">
+              <h3>Im Büro am {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</h3>
+              <p className="muted">{people.length} {people.length === 1 ? 'Person' : 'Personen'}</p>
+              {!people.length ? <p className="muted">Niemand gebucht.</p> : (
+                <ul className="people-list">
+                  {people.map((email) => <li key={email}>{email}</li>)}
+                </ul>
+              )}
+            </section>
+
+            <section className="card">
+              <h3>Ausgewählter Desk</h3>
+              {!activeDesk ? <p className="muted">Kein Desk ausgewählt.</p> : (
+                <div className="form-grid">
+                  <p className="desk-title">{activeDesk.name}</p>
+                  <p className="muted">Status: {activeDesk.status === 'free' ? 'frei' : 'belegt'}</p>
+                  {activeDesk.booking?.userEmail && <p className="muted">{activeDesk.booking.userEmail}</p>}
+                </div>
+              )}
+            </section>
+
             {isAdminMode && (
               <>
                 <section className="card">
@@ -514,6 +549,41 @@ export function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {!isAdminMode && activeDesk && popupPosition && createPortal(
+        <>
+          <div
+            className="booking-portal-backdrop"
+            onClick={() => {
+              setActiveDeskId('');
+              setPopupAnchor(null);
+            }}
+          />
+          <div
+            ref={popupRef}
+            className="booking-overlay card"
+            style={{ left: popupPosition.left, top: popupPosition.top }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>{activeDesk.name}</h3>
+            <p className="muted">{selectedDate}</p>
+            {activeDesk.status === 'free' ? (
+              <form onSubmit={createSingleBooking} className="form-grid">
+                <input value={userEmail} onChange={(e) => setUserEmail(e.target.value)} placeholder="E-Mail" />
+                <label className="checkbox-row">
+                  <input type="checkbox" checked={addToCalendar} onChange={(e) => setAddToCalendar(e.target.checked)} />
+                  Zum Kalender hinzufügen
+                </label>
+                <button className="btn btn-primary" type="submit">Buchen</button>
+              </form>
+            ) : (
+              <p className="muted">Gebucht von {activeDesk.booking?.userEmail}</p>
+            )}
+            <button className="btn btn-secondary" onClick={() => { setActiveDeskId(''); setPopupAnchor(null); }}>Schließen</button>
+          </div>
+        </>,
+        document.body
       )}
     </main>
   );
