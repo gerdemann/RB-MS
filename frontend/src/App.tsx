@@ -79,14 +79,13 @@ export function App() {
   const [showAdminLogin, setShowAdminLogin] = useState(false);
   const [adminEmail, setAdminEmail] = useState('admin@example.com');
   const [adminPassword, setAdminPassword] = useState('');
-  const [addDeskMode, setAddDeskMode] = useState(false);
+  const [adminTab, setAdminTab] = useState<'floorplans' | 'desks' | 'bookings' | 'employees'>('floorplans');
 
   const [createName, setCreateName] = useState('');
   const [createImageUrl, setCreateImageUrl] = useState('');
-  const [deleteCandidate, setDeleteCandidate] = useState<Floorplan | null>(null);
-  const [renameFloorplanCandidate, setRenameFloorplanCandidate] = useState<Floorplan | null>(null);
-  const [renameFloorplanName, setRenameFloorplanName] = useState('');
   const [floorplanActionMessage, setFloorplanActionMessage] = useState('');
+  const [floorplanNameInput, setFloorplanNameInput] = useState('');
+  const [floorplanImageInput, setFloorplanImageInput] = useState('');
   const [deskNameInput, setDeskNameInput] = useState('');
   const [deskActionMessage, setDeskActionMessage] = useState('');
 
@@ -262,6 +261,12 @@ export function App() {
     setDeskActionMessage('');
   }, [activeDesk?.id]);
 
+  useEffect(() => {
+    setFloorplanNameInput(selectedFloorplan?.name ?? '');
+    setFloorplanImageInput(selectedFloorplan?.imageUrl ?? '');
+    setFloorplanActionMessage('');
+  }, [selectedFloorplan?.id]);
+
   const loginAdmin = async (event: FormEvent) => {
     event.preventDefault();
     setErrorMessage('');
@@ -280,7 +285,6 @@ export function App() {
   const logoutAdmin = () => {
     localStorage.removeItem('adminToken');
     setAdminToken('');
-    setAddDeskMode(false);
     setInfoMessage('Zurück im Booking Mode.');
   };
 
@@ -298,11 +302,22 @@ export function App() {
     }
   };
 
+  const saveFloorplan = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!adminHeaders || !selectedFloorplan) return;
+    try {
+      await patch(`/admin/floorplans/${selectedFloorplan.id}`, { name: floorplanNameInput, imageUrl: floorplanImageInput }, adminHeaders);
+      await loadFloorplans();
+      setFloorplanActionMessage('Floorplan gespeichert.');
+    } catch (error) {
+      handleApiError(error);
+    }
+  };
+
   const deleteFloorplan = async (id: string) => {
     if (!adminHeaders) return;
     try {
       await del(`/admin/floorplans/${id}`, adminHeaders);
-      setDeleteCandidate(null);
       await loadFloorplans();
       if (selectedFloorplanId === id) {
         setSelectedFloorplanId('');
@@ -313,32 +328,15 @@ export function App() {
     }
   };
 
-  const saveFloorplanRename = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!adminHeaders || !renameFloorplanCandidate) return;
-    try {
-      await patch(`/admin/floorplans/${renameFloorplanCandidate.id}`, { name: renameFloorplanName }, adminHeaders);
-      const selectedId = selectedFloorplanId;
-      await loadFloorplans();
-      if (selectedId) {
-        setSelectedFloorplanId(selectedId);
-      }
-      setFloorplanActionMessage('Floorplan umbenannt.');
-      setRenameFloorplanCandidate(null);
-    } catch (error) {
-      handleApiError(error);
-    }
-  };
-
   const createDeskAtPosition = async (event: MouseEvent<HTMLDivElement>) => {
-    if (!adminHeaders || !addDeskMode || !selectedFloorplan) return;
+    if (!adminHeaders || !selectedFloorplan || adminTab !== 'desks') return;
     const target = event.target as HTMLElement;
     if (target.dataset.pin === 'desk-pin') return;
 
     const rect = event.currentTarget.getBoundingClientRect();
     const x = (event.clientX - rect.left) / rect.width;
     const y = (event.clientY - rect.top) / rect.height;
-    const name = window.prompt('Desk-Name', `Desk ${desks.length + 1}`) || `Desk ${desks.length + 1}`;
+    const name = `Desk ${desks.length + 1}`;
 
     try {
       await post(`/admin/floorplans/${selectedFloorplan.id}/desks`, { name, x, y }, adminHeaders);
@@ -480,15 +478,6 @@ export function App() {
             <h1>AVENCY Booking</h1>
           </div>
           <div className="topbar-controls">
-            <label className="field">
-              <span>Floorplan</span>
-              <select value={selectedFloorplanId} onChange={(e) => setSelectedFloorplanId(e.target.value)}>
-                <option value="">Bitte wählen</option>
-                {floorplans.map((floorplan) => (
-                  <option key={floorplan.id} value={floorplan.id}>{floorplan.name}</option>
-                ))}
-              </select>
-            </label>
             {isAdminMode ? (
               <>
                 <span className="status status-connected">Admin Mode</span>
@@ -503,209 +492,219 @@ export function App() {
         {!!errorMessage && <p className="toast toast-error">{errorMessage}</p>}
         {!!infoMessage && <p className="toast toast-success">{infoMessage}</p>}
 
-        <section className="layout-grid">
-          <aside className="card sidebar sticky-sidebar">
-            <section className="calendar-panel">
-              <div className="calendar-header">
-                <button className="btn btn-secondary" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() - 1, 1)))}>‹</button>
-                <strong>{monthLabel(visibleMonth)}</strong>
-                <button className="btn btn-secondary" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() + 1, 1)))}>›</button>
-              </div>
-              <button className="btn btn-primary full" onClick={() => selectDay(new Date())}>Heute</button>
-              <div className="calendar-grid" role="grid" aria-label="Monatsansicht">
-                {weekdays.map((weekday) => <span key={weekday} className="weekday-label">{weekday}</span>)}
-                {calendarDays.map((day) => {
-                  const dayKey = toDateKey(day);
-                  const inVisibleMonth = day.getUTCMonth() === visibleMonth.getUTCMonth();
-                  const isSelected = dayKey === selectedDate;
-                  const isToday = dayKey === today;
-                  return (
-                    <button
-                      key={dayKey}
-                      className={`day-btn ${inVisibleMonth ? '' : 'outside'} ${isSelected ? 'selected' : ''} ${isToday ? 'today' : ''}`}
-                      onClick={() => selectDay(day)}
-                    >
-                      {day.getUTCDate()}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
+        {isAdminMode ? (
+          <>
+            <nav className="card admin-tabs">
+              <button className={`tab-btn ${adminTab === 'floorplans' ? 'active' : ''}`} onClick={() => setAdminTab('floorplans')}>Floorplans</button>
+              <button className={`tab-btn ${adminTab === 'desks' ? 'active' : ''}`} onClick={() => setAdminTab('desks')}>Desks</button>
+              <button className={`tab-btn ${adminTab === 'bookings' ? 'active' : ''}`} onClick={() => setAdminTab('bookings')}>Buchungen</button>
+              <button className={`tab-btn ${adminTab === 'employees' ? 'active' : ''}`} onClick={() => setAdminTab('employees')}>Mitarbeiter</button>
+            </nav>
+            <section className="layout-grid admin-editor-layout">
+              <aside className="card sidebar">
+                {adminTab === 'floorplans' && (
+                  <div className="form-grid">
+                    <h3>Floorplan list</h3>
+                    <ul className="floorplan-list">
+                      {floorplans.map((floorplan) => (
+                        <li key={floorplan.id} className={`floorplan-item ${selectedFloorplanId === floorplan.id ? 'active' : ''}`}>
+                          <button className="linkish" onClick={() => setSelectedFloorplanId(floorplan.id)}>{floorplan.name}</button>
+                        </li>
+                      ))}
+                    </ul>
+                    <form onSubmit={createFloorplan} className="form-grid">
+                      <input required placeholder="Name" value={createName} onChange={(e) => setCreateName(e.target.value)} />
+                      <input required placeholder="Image URL" value={createImageUrl} onChange={(e) => setCreateImageUrl(e.target.value)} />
+                      <button className="btn btn-primary" type="submit">New floorplan</button>
+                    </form>
+                  </div>
+                )}
+                {(adminTab === 'desks' || adminTab === 'bookings') && (
+                  <label className="field">
+                    <span>Floorplan</span>
+                    <select value={selectedFloorplanId} onChange={(e) => setSelectedFloorplanId(e.target.value)}>
+                      <option value="">Bitte wählen</option>
+                      {floorplans.map((floorplan) => (
+                        <option key={floorplan.id} value={floorplan.id}>{floorplan.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                {adminTab === 'bookings' && (
+                  <label className="field">
+                    <span>Datum</span>
+                    <input type="date" value={selectedDate} onChange={(e) => setSelectedDate(e.target.value)} />
+                  </label>
+                )}
+              </aside>
 
-          </aside>
+              <section className="card canvas-card">
+                {!selectedFloorplan ? <p>Kein Floorplan ausgewählt.</p> : (
+                  <>
+                    <h2>{selectedFloorplan.name}</h2>
+                    {adminTab === 'desks' && <p className="muted">Klick auf freie Fläche, um einen Desk anzulegen.</p>}
+                    {(adminTab === 'floorplans' || adminTab === 'desks' || adminTab === 'bookings') && (
+                      <div onClick={adminTab === 'desks' ? createDeskAtPosition : undefined} className="floorplan-canvas" role="presentation">
+                        <img src={selectedFloorplan.imageUrl} alt={selectedFloorplan.name} />
+                        {(adminTab === 'desks' || adminTab === 'bookings') && desks.map((desk) => (
+                          <button
+                            key={desk.id}
+                            data-pin="desk-pin"
+                            type="button"
+                            className={`desk-pin ${desk.status} ${activeDeskId === desk.id ? 'selected' : ''}`}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              setActiveDeskId(desk.id);
+                            }}
+                            style={{ left: `${desk.x * 100}%`, top: `${desk.y * 100}%` }}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </section>
 
-          <section className="card canvas-card">
-            {!selectedFloorplan ? <p>Kein Floorplan ausgewählt.</p> : (
-              <>
-                <h2>{selectedFloorplan.name}</h2>
-                <p className="muted">{isAdminMode && addDeskMode ? 'Klick auf Bild, um Desk hinzuzufügen.' : `Belegung für ${selectedDate} (${weekdayNames[new Date(`${selectedDate}T00:00:00.000Z`).getUTCDay()]})`}</p>
-                {isAdminMode && <button className="btn btn-secondary" onClick={() => setAddDeskMode((v) => !v)}>{addDeskMode ? 'Desk hinzufügen beenden' : 'Desk hinzufügen'}</button>}
-                <div onClick={createDeskAtPosition} className="floorplan-canvas" role="presentation">
-                  <img src={selectedFloorplan.imageUrl} alt={selectedFloorplan.name} />
-                  {desks.map((desk) => (
-                    <button
-                      key={desk.id}
-                      data-pin="desk-pin"
-                      type="button"
-                      className={`desk-pin ${desk.status} ${activeDeskId === desk.id ? 'selected' : ''}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setActiveDeskId(desk.id);
-                        const rect = event.currentTarget.getBoundingClientRect();
-                        setPopupAnchor({ left: rect.left + rect.width + 10, top: rect.top });
-                      }}
-                      style={{ left: `${desk.x * 100}%`, top: `${desk.y * 100}%` }}
-                      title={`${desk.name}\nStatus: ${desk.status === 'free' ? 'frei' : 'belegt'}${desk.booking?.userEmail ? `\n${desk.booking.userDisplayName ?? desk.booking.userEmail}` : ''}`}
-                    />
-                  ))}
-                </div>
-              </>
-            )}
-          </section>
-
-          <aside className="right-panel sticky-sidebar">
-            <section className="card">
-              <h3>Im Büro am {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</h3>
-              <p className="muted">{people.length} {people.length === 1 ? 'Person' : 'Personen'}</p>
-              {!people.length ? <p className="muted">Niemand gebucht.</p> : (
-                <ul className="people-list">
-                  {people.map((person) => (
-                    <li key={`${person.email}-${person.deskName ?? ''}`}>
-                      <strong>{person.displayName ?? person.email}</strong>
-                      <div className="muted people-meta">{person.email}{person.deskName ? ` · ${person.deskName}` : ''}</div>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </section>
-
-            <section className="card">
-              <h3>Ausgewählter Desk</h3>
-              {!activeDesk ? <p className="muted">Kein Desk ausgewählt.</p> : (
-                <div className="form-grid">
-                  <p className="desk-title">{activeDesk.name}</p>
-                  <p className="muted">Status: {activeDesk.status === 'free' ? 'frei' : 'belegt'}</p>
-                  {activeDesk.booking?.userEmail && <p className="muted">{activeDesk.booking.userDisplayName ?? activeDesk.booking.userEmail}</p>}
-                </div>
-              )}
-            </section>
-
-            {isAdminMode && (
-              <>
-                <section className="card">
-                  <h3>Floorplans</h3>
-                  {!!floorplanActionMessage && <p className="muted">{floorplanActionMessage}</p>}
-                  <ul className="floorplan-list">
-                    {floorplans.map((floorplan) => (
-                      <li key={floorplan.id} className={`floorplan-item ${selectedFloorplanId === floorplan.id ? 'active' : ''}`}>
-                        <button className="linkish" onClick={() => setSelectedFloorplanId(floorplan.id)}>{floorplan.name}</button>
-                        <div className="inline-actions">
-                          <button className="btn btn-secondary" onClick={() => { setRenameFloorplanCandidate(floorplan); setRenameFloorplanName(floorplan.name); }}>Umbenennen</button>
-                          <button className="btn btn-danger" onClick={() => setDeleteCandidate(floorplan)}>Löschen</button>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-
-                <section className="card">
-                  <h3>Admin: Floorplan erstellen</h3>
-                  <form onSubmit={createFloorplan} className="form-grid">
-                    <input required placeholder="Name" value={createName} onChange={(e) => setCreateName(e.target.value)} />
-                    <input required placeholder="Image URL" value={createImageUrl} onChange={(e) => setCreateImageUrl(e.target.value)} />
-                    <button className="btn btn-primary" type="submit">Erstellen</button>
-                  </form>
-                </section>
-
-                <section className="card">
-                  <h3>Admin: Desks</h3>
-                  {!activeDesk ? <p className="muted">Desk auf Plan auswählen.</p> : (
+              <aside className="card right-panel">
+                {adminTab === 'floorplans' && (
+                  !selectedFloorplan ? <p className="muted">Floorplan auswählen.</p> : (
+                    <form onSubmit={saveFloorplan} className="form-grid">
+                      <h3>Properties</h3>
+                      {!!floorplanActionMessage && <p className="muted">{floorplanActionMessage}</p>}
+                      <input value={floorplanNameInput} onChange={(e) => setFloorplanNameInput(e.target.value)} placeholder="name" />
+                      <input value={floorplanImageInput} onChange={(e) => setFloorplanImageInput(e.target.value)} placeholder="imageUrl" />
+                      <button className="btn btn-primary" type="submit">Save</button>
+                      <button className="btn btn-danger" type="button" onClick={() => deleteFloorplan(selectedFloorplan.id)}>Delete</button>
+                    </form>
+                  )
+                )}
+                {adminTab === 'desks' && (
+                  !activeDesk ? <p className="muted">Desk auswählen.</p> : (
                     <div className="form-grid">
-                      <p className="desk-title">{activeDesk.name}</p>
-                      {!!deskActionMessage && <p className="muted">{deskActionMessage}</p>}
+                      <h3>Desk Properties</h3>
                       <form onSubmit={renameDesk} className="form-grid">
-                        <label className="field">
-                          <span>Desk Name</span>
-                          <input value={deskNameInput} onChange={(e) => setDeskNameInput(e.target.value)} />
-                        </label>
-                        <button className="btn btn-primary" type="submit">Speichern</button>
+                        <input value={deskNameInput} onChange={(e) => setDeskNameInput(e.target.value)} placeholder="Desk name" />
+                        <input readOnly value={activeDesk.x.toFixed(3)} />
+                        <input readOnly value={activeDesk.y.toFixed(3)} />
+                        <button className="btn btn-primary" type="submit">Save</button>
                       </form>
-                      <button className="btn btn-danger" onClick={deleteDesk}>Desk löschen</button>
+                      <button className="btn btn-danger" onClick={deleteDesk}>Delete</button>
                     </div>
-                  )}
-                </section>
-
-                <section className="card">
-                  <h3>Mitarbeiter</h3>
-                  {!!employeeActionMessage && <p className="muted">{employeeActionMessage}</p>}
-                  <form onSubmit={addEmployee} className="form-grid">
-                    <input required placeholder="Name" value={newEmployeeDisplayName} onChange={(e) => setNewEmployeeDisplayName(e.target.value)} />
-                    <input required placeholder="E-Mail" value={newEmployeeEmail} onChange={(e) => setNewEmployeeEmail(e.target.value)} />
-                    <button className="btn btn-primary" type="submit">Mitarbeiter hinzufügen</button>
-                  </form>
+                  )
+                )}
+                {adminTab === 'bookings' && (
                   <table>
-                    <thead>
-                      <tr>
-                        <th>Name</th>
-                        <th>E-Mail</th>
-                        <th>Status</th>
-                        <th>Aktionen</th>
-                      </tr>
-                    </thead>
+                    <thead><tr><th>Desk</th><th>Employee</th><th>Type</th><th>Edit</th><th>Delete</th></tr></thead>
                     <tbody>
-                      {employees.map((employee) => (
-                        <tr key={employee.id}>
-                          <td>
-                            {editingEmployeeId === employee.id ? (
-                              <input value={editingEmployeeName} onChange={(e) => setEditingEmployeeName(e.target.value)} />
-                            ) : employee.displayName}
-                          </td>
-                          <td>{employee.email}</td>
-                          <td>{employee.isActive ? 'Aktiv' : 'Inaktiv'}</td>
-                          <td className="inline-actions">
-                            {editingEmployeeId === employee.id ? (
-                              <button className="btn btn-primary" onClick={() => saveEmployeeName(employee.id)}>Speichern</button>
-                            ) : (
-                              <button className="btn btn-secondary" onClick={() => { setEditingEmployeeId(employee.id); setEditingEmployeeName(employee.displayName); }}>Umbenennen</button>
-                            )}
-                            <button className="btn btn-secondary" onClick={() => toggleEmployee(employee)}>{employee.isActive ? 'Deaktivieren' : 'Aktivieren'}</button>
-                          </td>
+                      {adminBookings.map((booking) => (
+                        <tr key={booking.id}>
+                          <td>{booking.desk.name}</td>
+                          <td>{booking.userEmail}</td>
+                          <td>Single</td>
+                          <td><button className="btn btn-secondary" onClick={() => { setEditingBookingId(booking.id); setEditBookingEmail(booking.userEmail); setEditBookingDate(booking.date.slice(0, 10)); saveAdminBooking(booking.id); }}>{editingBookingId === booking.id ? 'Save' : 'Edit'}</button></td>
+                          <td><button className="btn btn-danger" onClick={() => deleteAdminBooking(booking.id)}>Delete</button></td>
+                        </tr>
+                      ))}
+                      {adminRecurring.map((booking) => (
+                        <tr key={booking.id}>
+                          <td>{booking.desk.name}</td><td>{booking.userEmail}</td><td>Recurring</td><td>-</td>
+                          <td><button className="btn btn-danger" onClick={() => deleteAdminRecurring(booking.id)}>Delete</button></td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                </section>
-
-                <section className="card">
-                  <h3>Buchungen am {selectedDate}</h3>
-                  {adminBookings.map((booking) => (
-                    <div key={booking.id} className="admin-row">
-                      <strong>{booking.desk.name}</strong> · {booking.userEmail}
-                      {editingBookingId === booking.id ? (
-                        <div className="form-grid">
-                          <input value={editBookingEmail} onChange={(e) => setEditBookingEmail(e.target.value)} placeholder="userEmail" />
-                          <input type="date" value={editBookingDate} onChange={(e) => setEditBookingDate(e.target.value)} />
-                          <button className="btn btn-primary" onClick={() => saveAdminBooking(booking.id)}>Speichern</button>
-                        </div>
-                      ) : (
-                        <button className="btn btn-secondary" onClick={() => { setEditingBookingId(booking.id); setEditBookingEmail(booking.userEmail); setEditBookingDate(booking.date.slice(0,10)); }}>Edit</button>
-                      )}
-                      <button className="btn btn-danger" onClick={() => deleteAdminBooking(booking.id)}>Delete</button>
-                    </div>
-                  ))}
-
-                  <h3>Recurring bookings</h3>
-                  {adminRecurring.map((booking) => (
-                    <div key={booking.id} className="admin-row">
-                      <span>{booking.desk.name}: {booking.userEmail} · {weekdayNames[booking.weekday]}</span>
-                      <button className="btn btn-danger" onClick={() => deleteAdminRecurring(booking.id)}>Delete</button>
-                    </div>
-                  ))}
-                </section>
-              </>
-            )}
-          </aside>
-        </section>
+                )}
+                {adminTab === 'employees' && (
+                  <div className="form-grid">
+                    <form onSubmit={addEmployee} className="form-grid">
+                      <input required placeholder="Name" value={newEmployeeDisplayName} onChange={(e) => setNewEmployeeDisplayName(e.target.value)} />
+                      <input required placeholder="E-Mail" value={newEmployeeEmail} onChange={(e) => setNewEmployeeEmail(e.target.value)} />
+                      <button className="btn btn-primary" type="submit">Mitarbeiter hinzufügen</button>
+                    </form>
+                    <table>
+                      <thead><tr><th>Name</th><th>E-Mail</th><th>Status</th><th>Aktionen</th></tr></thead>
+                      <tbody>
+                        {employees.map((employee) => (
+                          <tr key={employee.id}>
+                            <td>{editingEmployeeId === employee.id ? <input value={editingEmployeeName} onChange={(e) => setEditingEmployeeName(e.target.value)} /> : employee.displayName}</td>
+                            <td>{employee.email}</td>
+                            <td>{employee.isActive ? 'Aktiv' : 'Inaktiv'}</td>
+                            <td className="inline-actions">
+                              {editingEmployeeId === employee.id ? (
+                                <button className="btn btn-primary" onClick={() => saveEmployeeName(employee.id)}>Speichern</button>
+                              ) : (
+                                <button className="btn btn-secondary" onClick={() => { setEditingEmployeeId(employee.id); setEditingEmployeeName(employee.displayName); }}>Umbenennen</button>
+                              )}
+                              <button className="btn btn-secondary" onClick={() => toggleEmployee(employee)}>{employee.isActive ? 'Deaktivieren' : 'Aktivieren'}</button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </aside>
+            </section>
+          </>
+        ) : (
+          <section className="layout-grid">
+            <aside className="card sidebar sticky-sidebar">
+              <section className="calendar-panel">
+                <div className="calendar-header">
+                  <button className="btn btn-secondary" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() - 1, 1)))}>‹</button>
+                  <strong>{monthLabel(visibleMonth)}</strong>
+                  <button className="btn btn-secondary" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() + 1, 1)))}>›</button>
+                </div>
+                <button className="btn btn-primary full" onClick={() => selectDay(new Date())}>Heute</button>
+                <div className="calendar-grid" role="grid" aria-label="Monatsansicht">
+                  {weekdays.map((weekday) => <span key={weekday} className="weekday-label">{weekday}</span>)}
+                  {calendarDays.map((day) => {
+                    const dayKey = toDateKey(day);
+                    const inVisibleMonth = day.getUTCMonth() === visibleMonth.getUTCMonth();
+                    const isSelected = dayKey === selectedDate;
+                    const isToday = dayKey === today;
+                    return (
+                      <button key={dayKey} className={`day-btn ${inVisibleMonth ? '' : 'outside'} ${isSelected ? 'selected' : ''} ${isToday ? 'today' : ''}`} onClick={() => selectDay(day)}>
+                        {day.getUTCDate()}
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+            </aside>
+            <section className="card canvas-card">
+              {!selectedFloorplan ? <p>Kein Floorplan ausgewählt.</p> : (
+                <>
+                  <h2>{selectedFloorplan.name}</h2>
+                  <div className="floorplan-canvas" role="presentation">
+                    <img src={selectedFloorplan.imageUrl} alt={selectedFloorplan.name} />
+                    {desks.map((desk) => (
+                      <button
+                        key={desk.id}
+                        data-pin="desk-pin"
+                        type="button"
+                        className={`desk-pin ${desk.status} ${activeDeskId === desk.id ? 'selected' : ''}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setActiveDeskId(desk.id);
+                          const rect = event.currentTarget.getBoundingClientRect();
+                          setPopupAnchor({ left: rect.left + rect.width + 10, top: rect.top });
+                        }}
+                        style={{ left: `${desk.x * 100}%`, top: `${desk.y * 100}%` }}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
+            </section>
+            <aside className="right-panel sticky-sidebar">
+              <section className="card">
+                <h3>Im Büro am {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</h3>
+                <p className="muted">{people.length} {people.length === 1 ? 'Person' : 'Personen'}</p>
+              </section>
+            </aside>
+          </section>
+        )}
 
         <p className="api-base">API: {API_BASE}</p>
       </div>
@@ -726,48 +725,10 @@ export function App() {
         </div>
       )}
 
-      {deleteCandidate && (
-        <div className="modal-backdrop">
-          <div className="modal card">
-            <h3>Floorplan löschen?</h3>
-            <div className="modal-actions">
-              <button className="btn btn-secondary" onClick={() => setDeleteCandidate(null)}>Abbrechen</button>
-              <button className="btn btn-danger" onClick={() => deleteFloorplan(deleteCandidate.id)}>Löschen</button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {renameFloorplanCandidate && (
-        <div className="modal-backdrop">
-          <div className="modal card">
-            <h3>Floorplan umbenennen</h3>
-            <form onSubmit={saveFloorplanRename} className="form-grid">
-              <input value={renameFloorplanName} onChange={(e) => setRenameFloorplanName(e.target.value)} placeholder="Name" />
-              <div className="modal-actions">
-                <button type="button" className="btn btn-secondary" onClick={() => setRenameFloorplanCandidate(null)}>Abbrechen</button>
-                <button className="btn btn-primary" type="submit">Speichern</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {!isAdminMode && activeDesk && popupPosition && createPortal(
         <>
-          <div
-            className="booking-portal-backdrop"
-            onClick={() => {
-              setActiveDeskId('');
-              setPopupAnchor(null);
-            }}
-          />
-          <div
-            ref={popupRef}
-            className="booking-overlay card"
-            style={{ left: popupPosition.left, top: popupPosition.top }}
-            onClick={(event) => event.stopPropagation()}
-          >
+          <div className="booking-portal-backdrop" onClick={() => { setActiveDeskId(''); setPopupAnchor(null); }} />
+          <div ref={popupRef} className="booking-overlay card" style={{ left: popupPosition.left, top: popupPosition.top }} onClick={(event) => event.stopPropagation()}>
             <h3>{activeDesk.name}</h3>
             <p className="muted">{selectedDate}</p>
             {activeDesk.status === 'free' ? (
