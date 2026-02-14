@@ -12,7 +12,13 @@ type FloorplanDesk = {
 type OverlayRect = { left: number; top: number; width: number; height: number };
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
-const normalized = (raw: number, size: number) => (raw > 1 ? clamp01(raw / Math.max(size, 100)) : clamp01(raw));
+
+const toNormalized = (raw: number, size: number): number => {
+  if (!Number.isFinite(raw)) return 0;
+  if (raw <= 1) return clamp01(raw);
+  if (raw <= 100) return clamp01(raw / 100);
+  return clamp01(raw / Math.max(size, 1));
+};
 
 type FloorplanCanvasProps = {
   imageUrl: string;
@@ -54,7 +60,7 @@ const DeskOverlay = memo(function DeskOverlay({
           key={desk.id}
           type="button"
           className={`desk-pin ${desk.status} ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''}`}
-          style={{ left: `${normalized(desk.x, overlayRect.width) * overlayRect.width}px`, top: `${normalized(desk.y, overlayRect.height) * overlayRect.height}px` }}
+          style={{ left: `${toNormalized(desk.x, overlayRect.width) * overlayRect.width}px`, top: `${toNormalized(desk.y, overlayRect.height) * overlayRect.height}px` }}
           title={`${desk.name} · ${desk.status === 'free' ? 'Frei' : desk.booking?.userDisplayName ?? desk.booking?.userEmail}`}
           onMouseEnter={() => onHoverDesk(desk.id)}
           onMouseLeave={() => onHoverDesk('')}
@@ -92,8 +98,25 @@ export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hov
 
   const handleCanvasClick = (event: MouseEvent<HTMLDivElement>) => {
     if (!onCanvasClick || !imgRef.current) return;
-    const imgRect = imgRef.current.getBoundingClientRect();
-    onCanvasClick({ xPct: clamp01((event.clientX - imgRect.left) / imgRect.width), yPct: clamp01((event.clientY - imgRect.top) / imgRect.height) });
+    const clickedLayerRect = imgRef.current.getBoundingClientRect();
+    const localX = event.clientX - clickedLayerRect.left;
+    const localY = event.clientY - clickedLayerRect.top;
+    const xNorm = clamp01(localX / clickedLayerRect.width);
+    const yNorm = clamp01(localY / clickedLayerRect.height);
+
+    if (import.meta.env.DEV) {
+      console.log({
+        clientX: event.clientX,
+        clientY: event.clientY,
+        rect: clickedLayerRect,
+        localX,
+        localY,
+        xNorm,
+        yNorm
+      });
+    }
+
+    onCanvasClick({ xPct: xNorm, yPct: yNorm });
   };
 
   return (

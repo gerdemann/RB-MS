@@ -227,17 +227,17 @@ function FloorplanEditor({ floorplan, onClose, onSaved, onError }: { floorplan: 
 }
 
 function PositionPickerDialog({ floorplan, x, y, onClose, onPick }: { floorplan: Floorplan | null; x: number | null; y: number | null; onClose: () => void; onPick: (x: number, y: number) => void }) {
-  const [px, setPx] = useState<number>(x ?? 50);
-  const [py, setPy] = useState<number>(y ?? 50);
+  const [px, setPx] = useState<number>(x ?? 0.5);
+  const [py, setPy] = useState<number>(y ?? 0.5);
   const setByClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const box = event.currentTarget.getBoundingClientRect();
-    const nextX = ((event.clientX - box.left) / box.width) * 100;
-    const nextY = ((event.clientY - box.top) / box.height) * 100;
-    setPx(Math.max(0, Math.min(100, nextX)));
-    setPy(Math.max(0, Math.min(100, nextY)));
+    const nextX = (event.clientX - box.left) / box.width;
+    const nextY = (event.clientY - box.top) / box.height;
+    setPx(Math.max(0, Math.min(1, nextX)));
+    setPy(Math.max(0, Math.min(1, nextY)));
   };
   return (
-    <div className="overlay"><section className="card dialog stack-sm"><h3>Position im Plan setzen</h3><p className="muted">Klicke im Plan, um x/y für den Desk zu setzen.</p><div className="position-picker" onClick={setByClick}>{floorplan?.imageUrl ? <img src={floorplan.imageUrl} alt={floorplan.name} className="position-image" /> : <div className="empty-state">Kein Floorplan-Bild</div>}<span className="position-pin" style={{ left: `${px}%`, top: `${py}%` }} /></div><p className="muted">Position: {Math.round(px)} / {Math.round(py)}</p><div className="inline-end"><button className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn" onClick={() => onPick(px, py)}>Übernehmen</button></div></section></div>
+    <div className="overlay"><section className="card dialog stack-sm"><h3>Position im Plan setzen</h3><p className="muted">Klicke im Plan, um die Desk-Position zu setzen.</p><div className="position-picker" onClick={setByClick}>{floorplan?.imageUrl ? <img src={floorplan.imageUrl} alt={floorplan.name} className="position-image" /> : <div className="empty-state">Kein Floorplan-Bild</div>}<span className="position-pin" style={{ left: `${px * 100}%`, top: `${py * 100}%` }} /></div><p className="muted">Position: {Math.round(px * 100)}% / {Math.round(py * 100)}%</p><div className="inline-end"><button className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn" onClick={() => onPick(px, py)}>Übernehmen</button></div></section></div>
   );
 }
 
@@ -274,7 +274,7 @@ function DeskEditor({ desk, floorplans, defaultFloorplanId, initialPosition, loc
 
   return (
     <>
-      <div className="overlay"><section className="card dialog stack-sm"><h3>{desk ? 'Desk bearbeiten' : 'Desk anlegen'}</h3><form className="stack-sm" onSubmit={submit}>{lockFloorplan ? <label className="field"><span>Floorplan</span><input value={floorplans.find((f) => f.id === form.floorplanId)?.name ?? '—'} disabled /></label> : <label className="field"><span>Floorplan</span><select required value={form.floorplanId} onChange={(e) => onFloorplanChange(e.target.value)}><option value="">Floorplan wählen</option>{floorplans.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>}<label className="field"><span>Label</span><input required placeholder="Desk Name" value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} /></label><div className="field"><span>Position</span><div className="inline-between"><Badge tone={form.x !== null && form.y !== null ? 'ok' : 'warn'}>{form.x !== null && form.y !== null ? `Position gesetzt (${Math.round(form.x)} / ${Math.round(form.y)})` : 'Keine Position gesetzt'}</Badge><div className="admin-toolbar">{onRequestPositionMode && <button type="button" className="btn btn-outline" onClick={() => { onClose(); onRequestPositionMode(); }}>Position im Plan ändern</button>}<button type="button" className="btn btn-outline" disabled={!form.floorplanId} onClick={() => setShowPicker(true)}>{form.x !== null && form.y !== null ? 'Neu positionieren' : 'Position im Plan setzen'}</button></div></div>{!form.floorplanId && <p className="muted">Bitte Floorplan wählen.</p>}</div>{inlineError && <p className="error-banner">{inlineError}</p>}<div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn" disabled={!canSave}>Speichern</button></div></form></section></div>
+      <div className="overlay"><section className="card dialog stack-sm"><h3>{desk ? 'Desk bearbeiten' : 'Desk anlegen'}</h3><form className="stack-sm" onSubmit={submit}>{lockFloorplan ? <label className="field"><span>Floorplan</span><input value={floorplans.find((f) => f.id === form.floorplanId)?.name ?? '—'} disabled /></label> : <label className="field"><span>Floorplan</span><select required value={form.floorplanId} onChange={(e) => onFloorplanChange(e.target.value)}><option value="">Floorplan wählen</option>{floorplans.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>}<label className="field"><span>Label</span><input required placeholder="Desk Name" value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} /></label><div className="field"><span>Position</span><div className="inline-between"><Badge tone={form.x !== null && form.y !== null ? 'ok' : 'warn'}>{form.x !== null && form.y !== null ? `Position gesetzt (${Math.round(form.x * 100)}% / ${Math.round(form.y * 100)}%)` : 'Keine Position gesetzt'}</Badge><div className="admin-toolbar">{onRequestPositionMode && <button type="button" className="btn btn-outline" onClick={() => { onClose(); onRequestPositionMode(); }}>Position im Plan ändern</button>}<button type="button" className="btn btn-outline" disabled={!form.floorplanId} onClick={() => setShowPicker(true)}>{form.x !== null && form.y !== null ? 'Neu positionieren' : 'Position im Plan setzen'}</button></div></div>{!form.floorplanId && <p className="muted">Bitte Floorplan wählen.</p>}</div>{inlineError && <p className="error-banner">{inlineError}</p>}<div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn" disabled={!canSave}>Speichern</button></div></form></section></div>
       {showPicker && <PositionPickerDialog floorplan={floorplan} x={form.x} y={form.y} onClose={() => setShowPicker(false)} onPick={(x, y) => { setForm((current) => ({ ...current, x, y })); setShowPicker(false); setInlineError(''); }} />}
     </>
   );
@@ -358,8 +358,8 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   };
 
   const onCanvasClick = async ({ xPct, yPct }: { xPct: number; yPct: number }) => {
-    const x = xPct * 100;
-    const y = yPct * 100;
+    const x = Math.max(0, Math.min(1, xPct));
+    const y = Math.max(0, Math.min(1, yPct));
     if (canvasMode === 'create') {
       setCreateRequest({ x, y });
       setCanvasMode('idle');
