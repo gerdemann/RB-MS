@@ -1,4 +1,4 @@
-import { MouseEvent, RefObject, memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Fragment, MouseEvent, RefObject, memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 type FloorplanDesk = {
@@ -14,6 +14,9 @@ type FloorplanDesk = {
 };
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
+type PixelPoint = { x: number; y: number };
+
+const DESK_PIN_HIT_SIZE = 30;
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -22,6 +25,17 @@ const toNormalized = (raw: number, size: number): number => {
   if (raw <= 1) return clamp01(raw);
   if (raw <= 100) return clamp01(raw / 100);
   return clamp01(raw / Math.max(size, 1));
+};
+
+const toPixelPoint = (desk: Pick<FloorplanDesk, 'x' | 'y'>, overlayRect: OverlayRect): PixelPoint => ({
+  x: toNormalized(desk.x, overlayRect.width) * overlayRect.width,
+  y: toNormalized(desk.y, overlayRect.height) * overlayRect.height,
+});
+
+const isDeskPinDebugEnabled = (): boolean => {
+  if (!import.meta.env.DEV || typeof window === 'undefined') return false;
+  const params = new URLSearchParams(window.location.search);
+  return params.get('deskPinDebug') === '1' || window.localStorage.getItem('desk-pin-debug') === '1';
 };
 
 const getInitials = (name?: string, email?: string): string => {
@@ -51,6 +65,7 @@ const FloorplanImage = memo(function FloorplanImage({ imageUrl, imageAlt, imgRef
 const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDeskId, selectedDate, overlayRect, onHoverDesk, onSelectDesk, onDeskDoubleClick }: { desks: FloorplanDesk[]; selectedDeskId: string; hoveredDeskId: string; selectedDate?: string; overlayRect: OverlayRect; onHoverDesk: (deskId: string) => void; onSelectDesk: (deskId: string) => void; onDeskDoubleClick?: (deskId: string) => void; }) {
   const [brokenImages, setBrokenImages] = useState<Record<string, boolean>>({});
   const [tooltip, setTooltip] = useState<{ deskId: string; left: number; top: number } | null>(null);
+  const showDebugCross = isDeskPinDebugEnabled();
 
   useEffect(() => {
     if (!tooltip) return;
@@ -69,35 +84,38 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
     <>
       <div className="desk-overlay" style={{ left: overlayRect.left, top: overlayRect.top, width: overlayRect.width, height: overlayRect.height }}>
         {desks.map((desk) => {
+          const point = toPixelPoint(desk, overlayRect);
           const initials = getInitials(desk.booking?.userDisplayName, desk.booking?.userEmail);
           const showPhoto = Boolean(desk.booking?.userPhotoUrl) && !brokenImages[desk.id];
           return (
-            <button
-              key={desk.id}
-              type="button"
-              className={`desk-pin ${desk.status} ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''} ${desk.isCurrentUsersDesk ? 'is-own-desk' : ''} ${desk.isHighlighted ? 'is-highlighted' : ''} ${desk.isSelected ? 'is-selected' : ''}`}
-              style={{ left: `${toNormalized(desk.x, overlayRect.width) * overlayRect.width}px`, top: `${toNormalized(desk.y, overlayRect.height) * overlayRect.height}px` }}
-              onMouseEnter={(event) => {
-                const rect = event.currentTarget.getBoundingClientRect();
-                setTooltip({ deskId: desk.id, left: rect.left + rect.width / 2, top: rect.top - 10 });
-                onHoverDesk(desk.id);
-              }}
-              onMouseLeave={() => {
-                setTooltip(null);
-                onHoverDesk('');
-              }}
-              onClick={(event) => { event.stopPropagation(); onSelectDesk(desk.id); }}
-              onDoubleClick={(event) => { event.stopPropagation(); onDeskDoubleClick?.(desk.id); }}
-              aria-label={`${desk.name} · ${desk.status === 'free' ? 'Frei' : desk.booking?.userDisplayName ?? desk.booking?.userEmail ?? 'Belegt'}`}
-            >
-              <span className="desk-pin-inner">
-                {desk.status === 'booked' ? (
-                  showPhoto ? <img src={desk.booking?.userPhotoUrl} alt={desk.booking?.userDisplayName ?? desk.booking?.userEmail ?? 'Mitarbeiter'} className="desk-pin-avatar-img" onError={() => setBrokenImages((current) => ({ ...current, [desk.id]: true }))} /> : <span className="desk-pin-initials">{initials}</span>
-                ) : (
-                  <span className="desk-pin-free-dot" aria-hidden="true" />
-                )}
-              </span>
-            </button>
+            <Fragment key={desk.id}>
+              {showDebugCross && <span className="desk-pin-debug-cross" style={{ left: `${point.x}px`, top: `${point.y}px` }} aria-hidden="true" />}
+              <button
+                type="button"
+                className={`desk-pin ${desk.status} ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''} ${desk.isCurrentUsersDesk ? 'is-own-desk' : ''} ${desk.isHighlighted ? 'is-highlighted' : ''} ${desk.isSelected ? 'is-selected' : ''}`}
+                style={{ left: `${point.x - DESK_PIN_HIT_SIZE / 2}px`, top: `${point.y - DESK_PIN_HIT_SIZE / 2}px` }}
+                onMouseEnter={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  setTooltip({ deskId: desk.id, left: rect.left + rect.width / 2, top: rect.top - 10 });
+                  onHoverDesk(desk.id);
+                }}
+                onMouseLeave={() => {
+                  setTooltip(null);
+                  onHoverDesk('');
+                }}
+                onClick={(event) => { event.stopPropagation(); onSelectDesk(desk.id); }}
+                onDoubleClick={(event) => { event.stopPropagation(); onDeskDoubleClick?.(desk.id); }}
+                aria-label={`${desk.name} · ${desk.status === 'free' ? 'Frei' : desk.booking?.userDisplayName ?? desk.booking?.userEmail ?? 'Belegt'}`}
+              >
+                <span className="desk-pin-inner">
+                  {desk.status === 'booked' ? (
+                    showPhoto ? <img src={desk.booking?.userPhotoUrl} alt={desk.booking?.userDisplayName ?? desk.booking?.userEmail ?? 'Mitarbeiter'} className="desk-pin-avatar-img" onError={() => setBrokenImages((current) => ({ ...current, [desk.id]: true }))} /> : <span className="desk-pin-initials">{initials}</span>
+                  ) : (
+                    <span className="desk-pin-free-dot" aria-hidden="true" />
+                  )}
+                </span>
+              </button>
+            </Fragment>
           );
         })}
       </div>
