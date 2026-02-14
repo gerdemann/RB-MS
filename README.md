@@ -25,7 +25,15 @@
 - `RUN_SEED` (optional)
 - `NODE_ENV=production`
 
-Hinweis: Beim Container-Start werden automatisch `prisma generate`, `prisma migrate deploy` und optional `prisma db seed` (bei `RUN_SEED=true`) ausgeführt.
+Hinweis: Beim Container-Start werden automatisch `prisma migrate deploy` und optional `prisma db seed` (bei `RUN_SEED=true`) ausgeführt. `prisma generate` läuft bereits im Docker-Build.
+
+
+### Docker Build Caching (Backend)
+
+- Das Backend-Dockerfile nutzt Layering für schnelle Rebuilds: In der Dependency-Stage werden nur `package.json`, `package-lock.json` und `prisma/schema.prisma` kopiert.
+- `npm ci` verwendet einen BuildKit-Cache-Mount (`/root/.npm`).
+- `prisma generate` verwendet einen BuildKit-Cache-Mount (`/root/.cache/prisma`).
+- Bei Änderungen nur unter `backend/src/**` kann der Dependency-Layer in Render dadurch gecacht bleiben.
 
 ### Frontend als Static Site
 
