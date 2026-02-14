@@ -10,18 +10,33 @@ const port = Number(process.env.PORT ?? 3000);
 
 const BREAKGLASS_EMAIL = (process.env.BREAKGLASS_EMAIL ?? process.env.ADMIN_EMAIL ?? 'admin@example.com').trim().toLowerCase();
 const BREAKGLASS_PASSWORD = process.env.BREAKGLASS_PASSWORD ?? process.env.ADMIN_PASSWORD;
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
+const FRONTEND_ORIGINS = (process.env.FRONTEND_ORIGIN ?? process.env.FRONTEND_URL ?? '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 const DEFAULT_USER_PASSWORD = process.env.DEFAULT_USER_PASSWORD ?? 'ChangeMe123!';
+const cookieSameSite: 'lax' | 'none' = (process.env.COOKIE_SAME_SITE ?? 'lax').toLowerCase() === 'none' ? 'none' : 'lax';
+const secureCookie = process.env.NODE_ENV === 'production' || cookieSameSite === 'none';
 
 if (!BREAKGLASS_PASSWORD) {
   throw new Error('BREAKGLASS_PASSWORD (or ADMIN_PASSWORD fallback) env var is required');
 }
 
-const secureCookie = process.env.NODE_ENV === 'production';
-
 app.use(
   cors({
-    origin: FRONTEND_ORIGIN ? [FRONTEND_ORIGIN] : true,
+    origin: (origin: string | undefined, callback: (error: Error | null, allow?: boolean) => void) => {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      if (FRONTEND_ORIGINS.length === 0) {
+        callback(null, true);
+        return;
+      }
+
+      callback(null, FRONTEND_ORIGINS.includes(origin));
+    },
     credentials: true
   })
 );
@@ -61,7 +76,7 @@ const applySessionCookies = (res: express.Response, session: SessionRecord) => {
   res.cookie(SESSION_COOKIE_NAME, session.id, {
     httpOnly: true,
     secure: secureCookie,
-    sameSite: 'lax',
+    sameSite: cookieSameSite,
     maxAge: SESSION_TTL_MS,
     path: '/'
   });
@@ -69,14 +84,14 @@ const applySessionCookies = (res: express.Response, session: SessionRecord) => {
   res.cookie(CSRF_COOKIE_NAME, session.csrfToken, {
     httpOnly: false,
     secure: secureCookie,
-    sameSite: 'lax',
+    sameSite: cookieSameSite,
     maxAge: SESSION_TTL_MS,
     path: '/'
   });
 };
 
 const clearSessionCookies = (res: express.Response) => {
-  const options = { httpOnly: true, secure: secureCookie, sameSite: 'lax' as const, path: '/' };
+  const options = { httpOnly: true, secure: secureCookie, sameSite: cookieSameSite, path: '/' };
   res.clearCookie(SESSION_COOKIE_NAME, options);
   res.clearCookie(CSRF_COOKIE_NAME, { ...options, httpOnly: false });
 };

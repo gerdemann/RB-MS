@@ -6,30 +6,33 @@ type AuthMeResponse = { user: AuthUser };
 
 type AuthContextValue = {
   user: AuthUser | null;
-  loading: boolean;
+  loadingAuth: boolean;
   isAuthenticated: boolean;
   isAdmin: boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
-  refreshMe: () => Promise<void>;
+  refreshMe: () => Promise<AuthUser | null>;
 };
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loadingAuth, setLoadingAuth] = useState(true);
 
-  const refreshMe = useCallback(async () => {
+  const refreshMe = useCallback(async (): Promise<AuthUser | null> => {
     try {
       const response = await get<AuthMeResponse>('/auth/me');
       setUser(response.user);
+      return response.user;
     } catch (error) {
       if (error instanceof ApiError && error.code === 'UNAUTHORIZED') {
         setUser(null);
-        return;
+        return null;
       }
+
       setUser(null);
+      return null;
     }
   }, []);
 
@@ -40,18 +43,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     void (async () => {
+      setLoadingAuth(true);
       try {
         await refreshMe();
       } finally {
-        setLoading(false);
+        setLoadingAuth(false);
       }
     })();
   }, [refreshMe]);
 
   const login = useCallback(async (email: string, password: string) => {
-    const response = await post<AuthMeResponse>('/auth/login', { email, password });
-    setUser(response.user);
-  }, []);
+    await post<AuthMeResponse>('/auth/login', { email, password });
+    const currentUser = await refreshMe();
+
+    if (!currentUser) {
+      throw new ApiError('Nicht autorisiert.', 401, 'UNAUTHORIZED');
+    }
+  }, [refreshMe]);
 
   const logout = useCallback(async () => {
     try {
@@ -63,13 +71,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<AuthContextValue>(() => ({
     user,
-    loading,
+    loadingAuth,
     isAuthenticated: Boolean(user),
     isAdmin: user?.role === 'admin',
     login,
     logout,
     refreshMe
-  }), [user, loading, login, logout, refreshMe]);
+  }), [user, loadingAuth, login, logout, refreshMe]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

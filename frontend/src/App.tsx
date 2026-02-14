@@ -59,7 +59,7 @@ function NotFound() {
 
 export function App() {
   const [path, setPath] = useState<Route>(currentPath());
-  const { user, loading, isAuthenticated, isAdmin, logout, refreshMe } = useAuth();
+  const { user, loadingAuth, isAuthenticated, isAdmin, logout, refreshMe } = useAuth();
 
   useEffect(() => {
     const handler = () => setPath(currentPath());
@@ -67,7 +67,7 @@ export function App() {
     return () => window.removeEventListener('hashchange', handler);
   }, []);
 
-  if (loading) return <LoadingGate />;
+  if (loadingAuth) return <LoadingGate />;
 
   if (!isAuthenticated) {
     if (path !== '/login') navigate('/login');
@@ -85,7 +85,9 @@ export function App() {
       return <LoadingGate />;
     }
 
-    return <AdminRouter path={path} navigate={navigate} onRoleStateChanged={refreshMe} onLogout={logout} />;
+    return <AdminRouter path={path} navigate={navigate} onRoleStateChanged={async () => {
+      await refreshMe();
+    }} onLogout={logout} />;
   }
 
   if (path === '/' || path.startsWith('/?')) {
