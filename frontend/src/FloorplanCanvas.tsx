@@ -23,6 +23,7 @@ type FloorplanCanvasProps = {
   onHoverDesk: (deskId: string) => void;
   onSelectDesk: (deskId: string) => void;
   onCanvasClick?: (coords: { xPct: number; yPct: number }) => void;
+  onDeskDoubleClick?: (deskId: string) => void;
 };
 
 const FloorplanImage = memo(function FloorplanImage({ imageUrl, imageAlt, imgRef, onLoad }: { imageUrl: string; imageAlt: string; imgRef: RefObject<HTMLImageElement>; onLoad: () => void }) {
@@ -35,7 +36,8 @@ const DeskOverlay = memo(function DeskOverlay({
   hoveredDeskId,
   overlayRect,
   onHoverDesk,
-  onSelectDesk
+  onSelectDesk,
+  onDeskDoubleClick
 }: {
   desks: FloorplanDesk[];
   selectedDeskId: string;
@@ -43,6 +45,7 @@ const DeskOverlay = memo(function DeskOverlay({
   overlayRect: OverlayRect;
   onHoverDesk: (deskId: string) => void;
   onSelectDesk: (deskId: string) => void;
+  onDeskDoubleClick?: (deskId: string) => void;
 }) {
   return (
     <div className="desk-overlay" style={{ left: overlayRect.left, top: overlayRect.top, width: overlayRect.width, height: overlayRect.height }}>
@@ -59,13 +62,17 @@ const DeskOverlay = memo(function DeskOverlay({
             event.stopPropagation();
             onSelectDesk(desk.id);
           }}
+          onDoubleClick={(event) => {
+            event.stopPropagation();
+            onDeskDoubleClick?.(desk.id);
+          }}
         />
       ))}
     </div>
   );
 });
 
-export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hoveredDeskId, onHoverDesk, onSelectDesk, onCanvasClick }: FloorplanCanvasProps) {
+export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hoveredDeskId, onHoverDesk, onSelectDesk, onCanvasClick, onDeskDoubleClick }: FloorplanCanvasProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
   const [overlayRect, setOverlayRect] = useState<OverlayRect>({ left: 0, top: 0, width: 1, height: 1 });
@@ -99,6 +106,7 @@ export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hov
         overlayRect={overlayRect}
         onHoverDesk={onHoverDesk}
         onSelectDesk={onSelectDesk}
+        onDeskDoubleClick={onDeskDoubleClick}
       />
     </div>
   );
