@@ -414,7 +414,7 @@ const employeeSelect = {
 
 const getActiveEmployeesByEmail = async (emails: string[]) => {
   if (emails.length === 0) {
-    return new Map<string, { displayName: string }>();
+    return new Map<string, { id: string; displayName: string }>();
   }
 
   const uniqueEmails = Array.from(new Set(emails.map((email) => normalizeEmail(email))));
@@ -424,13 +424,36 @@ const getActiveEmployeesByEmail = async (emails: string[]) => {
       email: { in: uniqueEmails }
     },
     select: {
+      id: true,
       email: true,
       displayName: true
     }
   });
 
-  return new Map(employees.map((employee) => [employee.email, { displayName: employee.displayName }]));
+  return new Map(employees.map((employee) => [employee.email, { id: employee.id, displayName: employee.displayName }]));
 };
+
+const getDeskContext = async (deskId: string) => prisma.desk.findUnique({
+  where: { id: deskId },
+  select: { id: true, name: true, floorplanId: true }
+});
+
+const getExistingUserBookingForDate = async (userEmail: string, date: Date) => prisma.booking.findUnique({
+  where: {
+    userEmail_date: {
+      userEmail: normalizeEmail(userEmail),
+      date
+    }
+  },
+  include: {
+    desk: {
+      select: {
+        id: true,
+        name: true
+      }
+    }
+  }
+});
 
 app.get('/health', async (_req, res) => {
   try {
@@ -1034,7 +1057,7 @@ app.get('/floorplans/:id/desks', async (req, res) => {
 });
 
 app.post('/bookings', async (req, res) => {
-  const { deskId, userEmail, date } = req.body as { deskId?: string; userEmail?: string; date?: string };
+  const { deskId, userEmail, date, replaceExisting } = req.body as { deskId?: string; userEmail?: string; date?: string; replaceExisting?: boolean };
 
   if (!deskId || !userEmail || !date) {
     res.status(400).json({ error: 'validation', message: 'deskId, userEmail and date are required' });
@@ -1047,9 +1070,77 @@ app.post('/bookings', async (req, res) => {
     return;
   }
 
-  const desk = await prisma.desk.findUnique({ where: { id: deskId } });
+  const desk = await getDeskContext(deskId);
   if (!desk) {
     res.status(404).json({ error: 'not_found', message: 'Desk not found' });
+    return;
+  }
+
+  const normalizedUserEmail = normalizeEmail(userEmail);
+  const existingUserBooking = await getExistingUserBookingForDate(normalizedUserEmail, parsedDate);
+  if (existingUserBooking && existingUserBooking.deskId !== deskId) {
+    if (!replaceExisting) {
+      sendConflict(res, 'User already has a booking for this date', {
+        existingBooking: {
+          id: existingUserBooking.id,
+          deskId: existingUserBooking.deskId,
+          deskName: existingUserBooking.desk?.name ?? existingUserBooking.deskId
+        },
+        requestedDesk: {
+          id: deskId,
+          name: desk.name
+        },
+        date
+      });
+      return;
+    }
+
+    const targetDeskBooking = await prisma.booking.findUnique({
+      where: {
+        deskId_date: {
+          deskId,
+          date: parsedDate
+        }
+      }
+    });
+
+    if (targetDeskBooking && targetDeskBooking.id !== existingUserBooking.id) {
+      sendConflict(res, 'Desk is already booked for this date', {
+        deskId,
+        date,
+        bookingId: targetDeskBooking.id
+      });
+      return;
+    }
+
+    const recurringConflict = await prisma.recurringBooking.findFirst({
+      where: {
+        deskId,
+        weekday: parsedDate.getUTCDay(),
+        validFrom: { lte: parsedDate },
+        OR: [{ validTo: null }, { validTo: { gte: parsedDate } }]
+      }
+    });
+
+    if (recurringConflict) {
+      sendConflict(res, 'Desk has a recurring booking conflict for this date', {
+        deskId,
+        date,
+        recurringBookingId: recurringConflict.id
+      });
+      return;
+    }
+
+    const updated = await prisma.booking.update({
+      where: { id: existingUserBooking.id },
+      data: { deskId }
+    });
+    res.status(200).json(updated);
+    return;
+  }
+
+  if (existingUserBooking && existingUserBooking.deskId === deskId) {
+    res.status(200).json(existingUserBooking);
     return;
   }
 
@@ -1089,7 +1180,6 @@ app.post('/bookings', async (req, res) => {
     return;
   }
 
-  const normalizedUserEmail = normalizeEmail(userEmail);
   const booking = await prisma.booking.create({
     data: {
       deskId,
@@ -1099,6 +1189,55 @@ app.post('/bookings', async (req, res) => {
   });
 
   res.status(201).json(booking);
+});
+
+app.put('/bookings/:id', async (req, res) => {
+  const id = getRouteId(req.params.id);
+  const { deskId } = req.body as { deskId?: string };
+  if (!id || !deskId) {
+    res.status(400).json({ error: 'validation', message: 'id and deskId are required' });
+    return;
+  }
+
+  const existing = await prisma.booking.findUnique({ where: { id } });
+  if (!existing) {
+    res.status(404).json({ error: 'not_found', message: 'Booking not found' });
+    return;
+  }
+
+  const authEmail = req.authUser?.email;
+  if (req.authUser?.role !== 'admin' && existing.userEmail !== authEmail) {
+    res.status(403).json({ error: 'forbidden', message: 'Cannot update booking of another user' });
+    return;
+  }
+
+  const nextDesk = await getDeskContext(deskId);
+  if (!nextDesk) {
+    res.status(404).json({ error: 'not_found', message: 'Desk not found' });
+    return;
+  }
+
+  const conflict = await prisma.booking.findUnique({ where: { deskId_date: { deskId, date: existing.date } } });
+  if (conflict && conflict.id !== existing.id) {
+    sendConflict(res, 'Desk is already booked for this date', { deskId, date: toISODateOnly(existing.date), bookingId: conflict.id });
+    return;
+  }
+
+  const recurringConflict = await prisma.recurringBooking.findFirst({
+    where: {
+      deskId,
+      weekday: existing.date.getUTCDay(),
+      validFrom: { lte: existing.date },
+      OR: [{ validTo: null }, { validTo: { gte: existing.date } }]
+    }
+  });
+  if (recurringConflict) {
+    sendConflict(res, 'Desk has a recurring booking conflict for this date', { deskId, date: toISODateOnly(existing.date), recurringBookingId: recurringConflict.id });
+    return;
+  }
+
+  const updated = await prisma.booking.update({ where: { id }, data: { deskId } });
+  res.status(200).json(updated);
 });
 
 app.post('/bookings/range', async (req, res) => {
@@ -1151,8 +1290,10 @@ app.post('/bookings/range', async (req, res) => {
   const [singleConflicts, recurringRules] = await Promise.all([
     prisma.booking.findMany({
       where: {
-        deskId,
-        date: { in: targetDates }
+        OR: [
+          { deskId, date: { in: targetDates } },
+          { userEmail: normalizeEmail(userEmail), date: { in: targetDates } }
+        ]
       },
       orderBy: { date: 'asc' }
     }),
@@ -1235,6 +1376,10 @@ app.get('/bookings', async (req, res) => {
 
   if (floorplanId) {
     where.desk = { floorplanId };
+  }
+
+  if (req.authUser?.role !== 'admin') {
+    where.userEmail = req.authUser?.email;
   }
 
   const bookings = await prisma.booking.findMany({
@@ -1760,37 +1905,85 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
 
 app.get('/admin/bookings', requireAdmin, async (req, res) => {
   const date = typeof req.query.date === 'string' ? req.query.date : undefined;
+  const from = typeof req.query.from === 'string' ? req.query.from : undefined;
+  const to = typeof req.query.to === 'string' ? req.query.to : undefined;
   const floorplanId = typeof req.query.floorplanId === 'string' ? req.query.floorplanId : undefined;
+  const employeeId = typeof req.query.employeeId === 'string' ? req.query.employeeId : undefined;
 
-  if (!date) {
-    res.status(400).json({ error: 'validation', message: 'date is required' });
-    return;
+  const where: Prisma.BookingWhereInput = {};
+
+  if (date) {
+    const parsedDate = toDateOnly(date);
+    if (!parsedDate) {
+      res.status(400).json({ error: 'validation', message: 'date must be in YYYY-MM-DD format' });
+      return;
+    }
+
+    where.date = parsedDate;
   }
 
-  const parsedDate = toDateOnly(date);
-  if (!parsedDate) {
-    res.status(400).json({ error: 'validation', message: 'date must be in YYYY-MM-DD format' });
-    return;
+  if (from || to) {
+    const rangeFilter = (where.date && typeof where.date === 'object' && 'equals' in where.date)
+      ? { gte: (where.date as Prisma.DateTimeFilter).equals }
+      : ((where.date as Prisma.DateTimeFilter | undefined) ?? {});
+
+    if (from) {
+      const fromDate = toDateOnly(from);
+      if (!fromDate) {
+        res.status(400).json({ error: 'validation', message: 'from must be in YYYY-MM-DD format' });
+        return;
+      }
+      rangeFilter.gte = fromDate;
+    }
+
+    if (to) {
+      const toDate = toDateOnly(to);
+      if (!toDate) {
+        res.status(400).json({ error: 'validation', message: 'to must be in YYYY-MM-DD format' });
+        return;
+      }
+      rangeFilter.lte = toDate;
+    }
+
+    where.date = rangeFilter;
+  }
+
+  if (floorplanId) {
+    where.desk = { floorplanId };
+  }
+
+  if (employeeId) {
+    const employee = await prisma.employee.findUnique({ where: { id: employeeId }, select: { email: true } });
+    if (!employee) {
+      res.status(404).json({ error: 'not_found', message: 'Employee not found' });
+      return;
+    }
+    where.userEmail = employee.email;
+  }
+
+  if (!isProd) {
+    console.log('ADMIN_BOOKINGS_FILTER', {
+      from: from ?? null,
+      to: to ?? null,
+      date: date ?? null,
+      employeeId: employeeId ?? null,
+      floorplanId: floorplanId ?? null
+    });
   }
 
   const bookings = await prisma.booking.findMany({
-    where: {
-      date: parsedDate,
-      ...(floorplanId ? { desk: { floorplanId } } : {})
-    },
-    include: {
-      desk: {
-        select: {
-          id: true,
-          name: true,
-          floorplanId: true
-        }
-      }
-    },
-    orderBy: [{ createdAt: 'asc' }]
+    where,
+    orderBy: [{ date: 'asc' }, { createdAt: 'asc' }]
   });
 
-  res.status(200).json(bookings);
+  const employeesByEmail = await getActiveEmployeesByEmail(bookings.map((booking) => booking.userEmail));
+  const enrichedBookings = bookings.map((booking) => ({
+    ...booking,
+    employeeId: employeesByEmail.get(normalizeEmail(booking.userEmail))?.id,
+    userDisplayName: employeesByEmail.get(normalizeEmail(booking.userEmail))?.displayName
+  }));
+
+  res.status(200).json(enrichedBookings);
 });
 
 app.delete('/admin/bookings', requireAdmin, async (req, res) => {
@@ -1830,10 +2023,10 @@ app.patch('/admin/bookings/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { userEmail, date } = req.body as { userEmail?: string; date?: string };
+  const { userEmail, date, deskId } = req.body as { userEmail?: string; date?: string; deskId?: string };
 
-  if (!userEmail && !date) {
-    res.status(400).json({ error: 'validation', message: 'userEmail or date must be provided' });
+  if (!userEmail && !date && !deskId) {
+    res.status(400).json({ error: 'validation', message: 'userEmail, deskId or date must be provided' });
     return;
   }
 
@@ -1850,19 +2043,27 @@ app.patch('/admin/bookings/:id', requireAdmin, async (req, res) => {
   }
 
   const nextDate = nextDateValue as Date;
+  const nextDeskId = deskId ?? existing.deskId;
+  const nextUserEmail = userEmail ? normalizeEmail(userEmail) : existing.userEmail;
 
-  if (nextDate.getTime() !== existing.date.getTime()) {
+  const nextDesk = await getDeskContext(nextDeskId);
+  if (!nextDesk) {
+    res.status(404).json({ error: 'not_found', message: 'Desk not found' });
+    return;
+  }
+
+  if (nextDate.getTime() !== existing.date.getTime() || nextDeskId !== existing.deskId) {
     const conflictingBooking = await prisma.booking.findFirst({
       where: {
         id: { not: existing.id },
-        deskId: existing.deskId,
+        deskId: nextDeskId,
         date: nextDate
       }
     });
 
     if (conflictingBooking) {
       sendConflict(res, 'Desk is already booked for this date', {
-        deskId: existing.deskId,
+        deskId: nextDeskId,
         date,
         bookingId: conflictingBooking.id
       });
@@ -1871,7 +2072,7 @@ app.patch('/admin/bookings/:id', requireAdmin, async (req, res) => {
 
     const recurringConflict = await prisma.recurringBooking.findFirst({
       where: {
-        deskId: existing.deskId,
+        deskId: nextDeskId,
         weekday: nextDate.getUTCDay(),
         validFrom: { lte: nextDate },
         OR: [{ validTo: null }, { validTo: { gte: nextDate } }]
@@ -1880,7 +2081,7 @@ app.patch('/admin/bookings/:id', requireAdmin, async (req, res) => {
 
     if (recurringConflict) {
       sendConflict(res, 'Desk has a recurring booking conflict for this date', {
-        deskId: existing.deskId,
+        deskId: nextDeskId,
         date,
         recurringBookingId: recurringConflict.id
       });
@@ -1888,11 +2089,32 @@ app.patch('/admin/bookings/:id', requireAdmin, async (req, res) => {
     }
   }
 
+  const userDateConflict = await prisma.booking.findFirst({
+    where: {
+      id: { not: existing.id },
+      userEmail: nextUserEmail,
+      date: nextDate
+    },
+    include: { desk: { select: { id: true, name: true } } }
+  });
+
+  if (userDateConflict) {
+    sendConflict(res, 'User already has a booking for this date', {
+      existingBooking: {
+        id: userDateConflict.id,
+        deskId: userDateConflict.deskId,
+        deskName: userDateConflict.desk?.name ?? userDateConflict.deskId
+      }
+    });
+    return;
+  }
+
   const updated = await prisma.booking.update({
     where: { id },
     data: {
-      ...(userEmail ? { userEmail: normalizeEmail(userEmail) } : {}),
-      ...(date ? { date: nextDate } : {})
+      ...(userEmail ? { userEmail: nextUserEmail } : {}),
+      ...(date ? { date: nextDate } : {}),
+      ...(deskId ? { deskId: nextDeskId } : {})
     }
   });
 

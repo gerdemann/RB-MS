@@ -7,7 +7,7 @@ import { FloorplanCanvas } from '../FloorplanCanvas';
 type Floorplan = { id: string; name: string; imageUrl: string; createdAt?: string; updatedAt?: string };
 type Desk = { id: string; floorplanId: string; name: string; x: number; y: number; createdAt?: string; updatedAt?: string };
 type Employee = { id: string; email: string; displayName: string; role: 'admin' | 'user'; isActive: boolean; createdAt?: string; updatedAt?: string };
-type Booking = { id: string; deskId: string; userEmail: string; userDisplayName?: string; date: string; createdAt?: string; updatedAt?: string };
+type Booking = { id: string; deskId: string; userEmail: string; userDisplayName?: string; employeeId?: string; date: string; createdAt?: string; updatedAt?: string };
 type Toast = { id: number; tone: 'success' | 'error'; message: string };
 type RouteProps = { path: string; navigate: (to: string) => void; onRoleStateChanged: () => Promise<void>; onLogout: () => Promise<void>; currentUser?: AdminSession | null };
 type AdminSession = { id?: string; email: string; name?: string; displayName?: string; role: 'admin' | 'user'; isActive?: boolean };
@@ -383,7 +383,7 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const [createRequest, setCreateRequest] = useState<{ x: number; y: number } | null>(null);
   const [deleteDesk, setDeleteDesk] = useState<Desk | null>(null);
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
-  const [selectedDeskIds, setSelectedDeskIds] = useState<string[]>([]);
+  const [selectedDeskIds, setSelectedDeskIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [selectedDeskId, setSelectedDeskId] = useState('');
   const [hoveredDeskId, setHoveredDeskId] = useState('');
@@ -440,7 +440,7 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   }, []);
 
   const filtered = useMemo(() => desks.filter((desk) => desk.name.toLowerCase().includes(query.toLowerCase())), [desks, query]);
-  const isAllVisibleSelected = filtered.length > 0 && filtered.every((desk) => selectedDeskIds.includes(desk.id));
+  const isAllVisibleSelected = filtered.length > 0 && filtered.every((desk) => selectedDeskIds.has(desk.id));
 
   const startCreateMode = () => {
     setEditingDesk(null);
@@ -474,26 +474,43 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
     }
   };
 
-  const clearSelection = () => setSelectedDeskIds([]);
+  const clearSelection = () => setSelectedDeskIds(new Set());
 
   const toggleDeskSelection = (deskId: string) => {
-    setSelectedDeskIds((current) => current.includes(deskId) ? current.filter((id) => id !== deskId) : [...current, deskId]);
+    setSelectedDeskIds((current) => {
+      const next = new Set(current);
+      if (next.has(deskId)) {
+        next.delete(deskId);
+      } else {
+        next.add(deskId);
+      }
+      return next;
+    });
   };
 
   const toggleAllVisibleDesks = () => {
     if (isAllVisibleSelected) {
-      setSelectedDeskIds((current) => current.filter((id) => !filtered.some((desk) => desk.id === id)));
+      setSelectedDeskIds((current) => {
+        const next = new Set(current);
+        filtered.forEach((desk) => next.delete(desk.id));
+        return next;
+      });
       return;
     }
-    setSelectedDeskIds((current) => Array.from(new Set([...current, ...filtered.map((desk) => desk.id)])));
+    setSelectedDeskIds((current) => {
+      const next = new Set(current);
+      filtered.forEach((desk) => next.add(desk.id));
+      return next;
+    });
   };
 
   const runBulkDelete = async () => {
-    if (selectedDeskIds.length === 0 || isBulkDeleting) return;
+    if (selectedDeskIds.size === 0 || isBulkDeleting) return;
     setIsBulkDeleting(true);
     try {
-      await del(`/admin/desks?ids=${encodeURIComponent(selectedDeskIds.join(','))}`);
-      toasts.success(`${selectedDeskIds.length} Desk(s) gelöscht`);
+      const selectedIds = Array.from(selectedDeskIds);
+      await del(`/admin/desks?ids=${encodeURIComponent(selectedIds.join(','))}`);
+      toasts.success(`${selectedIds.length} Desk(s) gelöscht`);
       setBulkDeleteOpen(false);
       clearSelection();
       await loadDesks(floorplanId);
@@ -514,19 +531,19 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
           <section className="desks-floor card stack-sm">
             <div className="inline-between"><strong>Floorplan-Editor</strong>{canvasMode === 'create' && <Badge tone="warn">Klicke auf den Plan, um den Desk zu platzieren</Badge>}{canvasMode === 'reposition' && pendingRepositionDesk && <Badge tone="warn">Neue Position für {pendingRepositionDesk.name} wählen</Badge>}</div>
             {!floorplan && <EmptyState text="Bitte Floorplan wählen." />}
-            {floorplan && <div className={`canvas-body admin-floor-canvas ${canvasMode !== 'idle' ? 'is-active-mode' : ''}`}><FloorplanCanvas imageUrl={floorplan.imageUrl} imageAlt={floorplan.name} desks={desks.map((desk) => ({ id: desk.id, name: desk.name, x: desk.x, y: desk.y, status: 'free', booking: null }))} selectedDeskId={selectedDeskId} hoveredDeskId={hoveredDeskId} onHoverDesk={setHoveredDeskId} onSelectDesk={setSelectedDeskId} onCanvasClick={onCanvasClick} onDeskDoubleClick={(deskId) => { const target = desks.find((desk) => desk.id === deskId); if (target) setEditingDesk(target); }} /></div>}
+            {floorplan && <div className={`canvas-body admin-floor-canvas ${canvasMode !== 'idle' ? 'is-active-mode' : ''}`}><FloorplanCanvas imageUrl={floorplan.imageUrl} imageAlt={floorplan.name} desks={desks.map((desk) => ({ id: desk.id, name: desk.name, x: desk.x, y: desk.y, status: 'free', booking: null, isSelected: selectedDeskIds.has(desk.id) }))} selectedDeskId={selectedDeskId} hoveredDeskId={hoveredDeskId} onHoverDesk={setHoveredDeskId} onSelectDesk={(deskId) => { setSelectedDeskId(deskId); toggleDeskSelection(deskId); }} onCanvasClick={onCanvasClick} onDeskDoubleClick={(deskId) => { const target = desks.find((desk) => desk.id === deskId); if (target) setEditingDesk(target); }} /></div>}
           </section>
 
           <section className="desks-table card stack-sm">
-            {selectedDeskIds.length > 0 && <div className="bulk-actions"><strong>{selectedDeskIds.length} ausgewählt</strong><div className="inline-end"><button className="btn btn-danger" disabled={isBulkDeleting} onClick={() => setBulkDeleteOpen(true)}>{isBulkDeleting ? 'Lösche…' : 'Auswahl löschen'}</button><button className="btn btn-outline" disabled={isBulkDeleting} onClick={clearSelection}>Abbrechen</button></div></div>}
-            <div className="table-wrap"><table className="admin-table"><thead><tr><th><input type="checkbox" checked={isAllVisibleSelected} onChange={toggleAllVisibleDesks} aria-label="Alle sichtbaren Desks auswählen" /></th><th>Label</th><th>Aktualisiert</th><th className="align-right">Aktionen</th></tr></thead>{state.loading && !state.ready ? <SkeletonRows columns={4} /> : <tbody>{filtered.map((desk) => <tr key={desk.id} ref={(row) => { rowRefs.current[desk.id] = row; }} className={selectedDeskId === desk.id ? 'row-selected' : ''} onClick={() => setSelectedDeskId(desk.id)}><td><input type="checkbox" checked={selectedDeskIds.includes(desk.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleDeskSelection(desk.id)} aria-label={`${desk.name} auswählen`} /></td><td>{desk.name}</td><td>{formatDate(desk.updatedAt ?? desk.createdAt)}</td><td className="align-right"><RowMenu items={[{ label: 'Position ändern', onSelect: () => { setSelectedDeskId(desk.id); setPendingRepositionDesk(desk); setCanvasMode('reposition'); } }, { label: 'Bearbeiten', onSelect: () => setEditingDesk(desk) }, { label: 'Löschen', onSelect: () => setDeleteDesk(desk), danger: true }]} /></td></tr>)}</tbody>}</table></div>
+            {selectedDeskIds.size > 0 && <div className="bulk-actions"><strong>{selectedDeskIds.size} ausgewählt</strong><div className="inline-end"><button className="btn btn-danger" disabled={isBulkDeleting} onClick={() => setBulkDeleteOpen(true)}>{isBulkDeleting ? 'Lösche…' : 'Auswahl löschen'}</button><button className="btn btn-outline" disabled={isBulkDeleting} onClick={clearSelection}>Abbrechen</button></div></div>}
+            <div className="table-wrap"><table className="admin-table"><thead><tr><th><input type="checkbox" checked={isAllVisibleSelected} onChange={toggleAllVisibleDesks} aria-label="Alle sichtbaren Desks auswählen" /></th><th>Label</th><th>Aktualisiert</th><th className="align-right">Aktionen</th></tr></thead>{state.loading && !state.ready ? <SkeletonRows columns={4} /> : <tbody>{filtered.map((desk) => <tr key={desk.id} ref={(row) => { rowRefs.current[desk.id] = row; }} className={selectedDeskId === desk.id ? 'row-selected' : ''} onClick={() => setSelectedDeskId(desk.id)}><td><input type="checkbox" checked={selectedDeskIds.has(desk.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleDeskSelection(desk.id)} aria-label={`${desk.name} auswählen`} /></td><td>{desk.name}</td><td>{formatDate(desk.updatedAt ?? desk.createdAt)}</td><td className="align-right"><RowMenu items={[{ label: 'Position ändern', onSelect: () => { setSelectedDeskId(desk.id); setPendingRepositionDesk(desk); setCanvasMode('reposition'); } }, { label: 'Bearbeiten', onSelect: () => setEditingDesk(desk) }, { label: 'Löschen', onSelect: () => setDeleteDesk(desk), danger: true }]} /></td></tr>)}</tbody>}</table></div>
             {!state.loading && filtered.length === 0 && <EmptyState text="Keine Desks gefunden." action={<button className="btn" onClick={startCreateMode}>Neuen Desk platzieren</button>} />}
           </section>
         </div>
       </section>
       {(createRequest || editingDesk) && <DeskEditor desk={editingDesk} floorplans={floorplans} defaultFloorplanId={floorplanId} initialPosition={createRequest} lockFloorplan={Boolean(createRequest)} onRequestPositionMode={editingDesk ? () => { setPendingRepositionDesk(editingDesk); setCanvasMode('reposition'); } : undefined} onClose={() => { setCreateRequest(null); setEditingDesk(null); navigate('/admin/desks'); }} onSaved={async () => { setCreateRequest(null); setEditingDesk(null); toasts.success('Desk gespeichert'); await loadDesks(floorplanId); }} onError={toasts.error} />}
       {deleteDesk && <ConfirmDialog title="Desk löschen?" description={`Desk "${deleteDesk.name}" wird entfernt.`} onCancel={() => setDeleteDesk(null)} onConfirm={async () => { await del(`/admin/desks/${deleteDesk.id}`); setDeleteDesk(null); toasts.success('Desk gelöscht'); await loadDesks(floorplanId); }} />}
-      {bulkDeleteOpen && <ConfirmDialog title={`${selectedDeskIds.length} Einträge löschen?`} description="Dieser Vorgang ist irreversibel." onCancel={() => setBulkDeleteOpen(false)} onConfirm={() => void runBulkDelete()} confirmDisabled={isBulkDeleting} confirmLabel={isBulkDeleting ? 'Lösche…' : 'Löschen'} />}
+      {bulkDeleteOpen && <ConfirmDialog title={`${selectedDeskIds.size} Einträge löschen?`} description="Dieser Vorgang ist irreversibel." onCancel={() => setBulkDeleteOpen(false)} onConfirm={() => void runBulkDelete()} confirmDisabled={isBulkDeleting} confirmLabel={isBulkDeleting ? 'Lösche…' : 'Löschen'} />}
       <ToastViewport toasts={toasts.toasts} />
     </AdminLayout>
   );
@@ -556,7 +573,7 @@ function BookingsPage({ path, navigate, onLogout, currentUser }: RouteProps) {
     try {
       const floorplanRows = await get<Floorplan[]>('/floorplans');
       const deskRows = (await Promise.all(floorplanRows.map((plan) => get<Desk[]>(`/floorplans/${plan.id}/desks`)))).flat();
-      const [employeeRows, bookingRows] = await Promise.all([get<Employee[]>('/admin/employees'), get<Booking[]>(`/bookings?from=${from}&to=${to}`)]);
+      const [employeeRows, bookingRows] = await Promise.all([get<Employee[]>('/admin/employees'), get<Booking[]>(`/admin/bookings?from=${from}&to=${to}`)]);
       setFloorplans(floorplanRows);
       setDesks(deskRows);
       setEmployees(employeeRows);
@@ -605,10 +622,17 @@ function BookingsPage({ path, navigate, onLogout, currentUser }: RouteProps) {
     }
   };
 
+  const resetFilters = () => {
+    setFloorplanId('');
+    setDeskId('');
+    setPersonQuery('');
+    setSelectedBookingIds([]);
+  };
+
   return (
     <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Buchungen" actions={<button className="btn" onClick={() => setCreating(true)}>Neu</button>} currentUser={currentUser ?? null}>
       <section className="card stack-sm">
-        <div className="crud-toolbar"><div className="inline-between"><h3>Buchungen</h3><Badge>{filtered.length}</Badge></div><div className="admin-toolbar admin-toolbar-wrap"><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /><select value={floorplanId} onChange={(e) => setFloorplanId(e.target.value)}><option value="">Alle Floorpläne</option>{floorplans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select><select value={deskId} onChange={(e) => setDeskId(e.target.value)}><option value="">Alle Desks</option>{desks.filter((desk) => (floorplanId ? desk.floorplanId === floorplanId : true)).map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select><div className="admin-search">🔎<input value={personQuery} onChange={(e) => setPersonQuery(e.target.value)} placeholder="Person suchen" /></div></div></div>
+        <div className="crud-toolbar"><div className="inline-between"><h3>Buchungen</h3><Badge>{filtered.length}</Badge></div><div className="admin-toolbar admin-toolbar-wrap"><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /><select value={floorplanId} onChange={(e) => setFloorplanId(e.target.value)}><option value="">Alle Floorpläne</option>{floorplans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select><select value={deskId} onChange={(e) => setDeskId(e.target.value)}><option value="">Alle Desks</option>{desks.filter((desk) => (floorplanId ? desk.floorplanId === floorplanId : true)).map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select><div className="admin-search">🔎<input value={personQuery} onChange={(e) => setPersonQuery(e.target.value)} placeholder="Person suchen" /></div><button className="btn btn-outline" onClick={resetFilters}>Filter zurücksetzen</button></div></div>
         {state.error && <ErrorState text={state.error} onRetry={load} />}
         {selectedBookingIds.length > 0 && <div className="bulk-actions"><strong>{selectedBookingIds.length} ausgewählt</strong><div className="inline-end"><button className="btn btn-danger" disabled={isBulkDeleting} onClick={() => setBulkDeleteOpen(true)}>{isBulkDeleting ? 'Lösche…' : 'Auswahl löschen'}</button><button className="btn btn-outline" disabled={isBulkDeleting} onClick={() => setSelectedBookingIds([])}>Abbrechen</button></div></div>}
         <div className="table-wrap"><table className="admin-table"><thead><tr><th><input type="checkbox" checked={isAllVisibleSelected} onChange={toggleAllVisibleBookings} aria-label="Alle sichtbaren Buchungen auswählen" /></th><th>Datum</th><th>Person</th><th>Desk</th><th>Floorplan</th><th>Erstellt</th><th className="align-right">Aktionen</th></tr></thead>{state.loading && !state.ready ? <SkeletonRows columns={7} /> : <tbody>{filtered.map((booking) => { const desk = desks.find((item) => item.id === booking.deskId); const floorplan = floorplans.find((plan) => plan.id === desk?.floorplanId); return <tr key={booking.id}><td><input type="checkbox" checked={selectedBookingIds.includes(booking.id)} onChange={() => toggleBookingSelection(booking.id)} aria-label={`Buchung ${booking.id} auswählen`} /></td><td>{formatDateOnly(booking.date)}</td><td>{booking.userDisplayName || booking.userEmail}</td><td>{desk?.name ?? booking.deskId}</td><td>{floorplan?.name ?? '—'}</td><td>{formatDate(booking.createdAt)}</td><td className="align-right"><RowMenu items={[{ label: 'Bearbeiten', onSelect: () => setEditing(booking) }, { label: 'Löschen', onSelect: () => setDeleteBooking(booking), danger: true }]} /></td></tr>; })}</tbody>}</table></div>

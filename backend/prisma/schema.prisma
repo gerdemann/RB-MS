@@ -61,6 +61,7 @@ model Booking {
   desk      Desk     @relation(fields: [deskId], references: [id], onDelete: Cascade)
 
   @@unique([deskId, date])
+  @@unique([userEmail, date])
   @@index([date])
   @@index([deskId])
 }

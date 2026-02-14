@@ -229,6 +229,10 @@ export function patch<T>(path: string, payload: unknown): Promise<T> {
   return request<T>(path, 'PATCH', payload);
 }
 
+export function put<T>(path: string, payload: unknown): Promise<T> {
+  return request<T>(path, 'PUT', payload);
+}
+
 export function del<T>(path: string): Promise<T> {
   return request<T>(path, 'DELETE');
 }
