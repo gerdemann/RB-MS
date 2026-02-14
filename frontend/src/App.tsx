@@ -15,10 +15,7 @@ type OccupancyDesk = {
 type OccupancyPerson = { email: string; displayName?: string; deskName?: string; deskId?: string };
 type OccupancyResponse = { date: string; floorplanId: string; desks: OccupancyDesk[]; people: OccupancyPerson[] };
 type BookingEmployee = { id: string; email: string; displayName: string };
-type DayBooking = { id: string; deskId: string; userEmail: string; date: string; desk?: { id: string; name: string } };
-type RecurringBooking = { id: string; deskId: string; userEmail: string; weekday: number; validFrom: string; validTo: string | null };
-
-type RightTab = 'bookings' | 'people' | 'details';
+type OccupantForDay = { deskId: string; deskLabel: string; userId: string; name: string; email: string };
 type BookingMode = 'single' | 'range' | 'series';
 
 const today = new Date().toISOString().slice(0, 10);
@@ -60,12 +57,9 @@ export function App() {
   const [occupancy, setOccupancy] = useState<OccupancyResponse | null>(null);
   const [employees, setEmployees] = useState<BookingEmployee[]>([]);
   const [selectedEmployeeEmail, setSelectedEmployeeEmail] = useState('');
-  const [dayBookings, setDayBookings] = useState<DayBooking[]>([]);
-  const [recurringBookings, setRecurringBookings] = useState<RecurringBooking[]>([]);
 
   const [selectedDeskId, setSelectedDeskId] = useState('');
   const [hoveredDeskId, setHoveredDeskId] = useState('');
-  const [rightTab, setRightTab] = useState<RightTab>('bookings');
 
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isUpdatingOccupancy, setIsUpdatingOccupancy] = useState(false);
@@ -87,15 +81,23 @@ export function App() {
   const selectedFloorplan = useMemo(() => floorplans.find((f) => f.id === selectedFloorplanId) ?? null, [floorplans, selectedFloorplanId]);
   const desks = useMemo(() => occupancy?.desks ?? [], [occupancy]);
   const filteredDesks = useMemo(() => (onlyFree ? desks.filter((desk) => desk.status === 'free') : desks), [desks, onlyFree]);
-  const people = useMemo(() => occupancy?.people ?? [], [occupancy]);
   const selectedDesk = useMemo(() => desks.find((desk) => desk.id === selectedDeskId) ?? null, [desks, selectedDeskId]);
+  const occupantsForDay = useMemo<OccupantForDay[]>(
+    () => desks
+      .filter((desk) => desk.booking)
+      .map((desk) => ({
+        deskId: desk.id,
+        deskLabel: desk.name,
+        userId: desk.booking?.id ?? desk.booking?.userEmail ?? `${desk.id}-occupant`,
+        name: desk.booking?.userDisplayName ?? desk.booking?.userEmail ?? 'Unbekannt',
+        email: desk.booking?.userEmail ?? ''
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name, 'de')),
+    [desks]
+  );
+  const selectedDeskOccupant = useMemo(() => occupantsForDay.find((occupant) => occupant.deskId === selectedDeskId) ?? null, [occupantsForDay, selectedDeskId]);
 
   const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
-
-  const recurringForSelectedDesk = useMemo(
-    () => recurringBookings.filter((booking) => booking.deskId === selectedDeskId || (!selectedDeskId && booking.deskId)),
-    [recurringBookings, selectedDeskId]
-  );
 
   const loadOccupancy = async (floorplanId: string, date: string) => {
     if (!floorplanId) return;
@@ -104,15 +106,9 @@ export function App() {
     setErrorMessage('');
 
     try {
-      const [nextOccupancy, nextDayBookings, nextRecurring] = await Promise.all([
-        get<OccupancyResponse>(`/occupancy?floorplanId=${floorplanId}&date=${date}`),
-        get<DayBooking[]>(`/bookings?floorplanId=${floorplanId}&from=${date}&to=${date}`),
-        get<RecurringBooking[]>(`/recurring-bookings?floorplanId=${floorplanId}`)
-      ]);
+      const nextOccupancy = await get<OccupancyResponse>(`/occupancy?floorplanId=${floorplanId}&date=${date}`);
 
       setOccupancy(nextOccupancy);
-      setDayBookings(nextDayBookings);
-      setRecurringBookings(nextRecurring);
       markBackendAvailable(true);
       setBackendDown(false);
       setSelectedDeskId((prev) => (nextOccupancy.desks.some((desk) => desk.id === prev) ? prev : ''));
@@ -341,105 +337,70 @@ export function App() {
           <p className="muted">{new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
           <h3>{selectedFloorplan?.name ?? 'Kein Floorplan'}</h3>
         </div>
-        <span className="badge">Im Büro: {people.length}</span>
+        <span className="badge">Im Büro: {occupantsForDay.length}</span>
       </div>
 
-      <div className="tabs">
-        {(['bookings', 'people', 'details'] as RightTab[]).map((tab) => (
-          <button key={tab} className={`tab-btn ${rightTab === tab ? 'active' : ''}`} onClick={() => setRightTab(tab)}>
-            {tab === 'bookings' ? 'Buchungen' : tab === 'people' ? 'Personen' : 'Details'}
-          </button>
-        ))}
-      </div>
-
-      {rightTab === 'bookings' && (
-        <div className="table-wrap stack-sm">
-          {dayBookings.length === 0 && recurringBookings.length === 0 ? (
-            <div className="empty-state">
-              <p>Keine Buchungen gefunden.</p>
-              <button className="btn" onClick={() => setBookingDialogOpen(true)}>Buchung erstellen</button>
-            </div>
-          ) : (
-            <>
-              <div>
-                <h4>Tagesbuchungen</h4>
-                <table>
-                  <thead><tr><th>Desk</th><th>Person</th></tr></thead>
-                  <tbody>
-                    {dayBookings.map((booking) => (
-                      <tr
-                        key={booking.id}
-                        className={selectedDeskId === booking.deskId ? 'row-selected' : ''}
-                        onMouseEnter={() => setHoveredDeskId(booking.deskId)}
-                        onMouseLeave={() => setHoveredDeskId('')}
-                        onClick={() => {
-                          setSelectedDeskId(booking.deskId);
-                          setRightTab('details');
-                        }}
-                      >
-                        <td>{booking.desk?.name ?? desks.find((desk) => desk.id === booking.deskId)?.name ?? 'Desk'}</td>
-                        <td>{booking.userEmail}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              <div>
-                <h4>Serienbuchungen</h4>
-                {recurringForSelectedDesk.length === 0 ? (
-                  <p className="muted">Keine Serienbuchungen für die Auswahl.</p>
-                ) : (
-                  <table>
-                    <thead><tr><th>Desk</th><th>Wochentag</th><th>Zeitraum</th></tr></thead>
-                    <tbody>
-                      {recurringForSelectedDesk.map((booking) => (
-                        <tr key={booking.id} onMouseEnter={() => setHoveredDeskId(booking.deskId)} onMouseLeave={() => setHoveredDeskId('')} onClick={() => setSelectedDeskId(booking.deskId)}>
-                          <td>{desks.find((desk) => desk.id === booking.deskId)?.name ?? 'Desk'}</td>
-                          <td>{weekdays[(booking.weekday + 6) % 7]}</td>
-                          <td>{booking.validFrom} – {booking.validTo ?? 'offen'}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            </>
-          )}
+      {selectedDesk && (
+        <div className="filter-row">
+          <span className="badge">Gefiltert: {selectedDesk.name}</span>
+          <button className="btn btn-outline" onClick={() => setSelectedDeskId('')}>Alle anzeigen</button>
         </div>
       )}
 
-      {rightTab === 'people' && (
-        <ul className="people-list">
-          {people.map((person) => (
-            <li
-              key={`${person.email}-${person.deskId ?? 'none'}`}
-              className={selectedDeskId === person.deskId ? 'row-selected' : ''}
-              onMouseEnter={() => setHoveredDeskId(person.deskId ?? '')}
-              onMouseLeave={() => setHoveredDeskId('')}
-              onClick={() => person.deskId && setSelectedDeskId(person.deskId)}
-            >
-              <div>
-                <strong>{person.displayName ?? person.email}</strong>
-                <p className="muted">{person.email}</p>
-              </div>
-              <span>{person.deskName ?? '—'}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      {rightTab === 'details' && (
-        <div>
-          {selectedDesk ? (
-            <div className="stack-sm">
-              <h4>{selectedDesk.name}</h4>
-              <p className="muted">Status: {selectedDesk.status === 'free' ? 'Frei' : 'Belegt'}</p>
-              <p className="muted">Ausstattung: Monitor, Docking</p>
+      {selectedDesk ? (
+        selectedDeskOccupant ? (
+          <div className="occupant-card">
+            <p className="muted">Belegt</p>
+            <h4>{selectedDeskOccupant.name}</h4>
+            <p className="muted">{selectedDeskOccupant.email}</p>
+            <p><strong>Desk:</strong> {selectedDeskOccupant.deskLabel}</p>
+          </div>
+        ) : (
+          <div className="empty-state stack-sm">
+            <p>{selectedDesk.name} ist frei.</p>
+            <div>
+              <button
+                className="btn"
+                onClick={() => {
+                  setSelectedDeskId(selectedDesk.id);
+                  setBookingDialogOpen(true);
+                }}
+              >
+                Buchung erstellen
+              </button>
             </div>
-          ) : (
-            <div className="empty-state"><p>Kein Desk ausgewählt. Klicke auf einen Platz im Plan.</p></div>
-          )}
+          </div>
+        )
+      ) : occupantsForDay.length === 0 ? (
+        <div className="empty-state">
+          <p>Niemand im Büro an diesem Tag.</p>
+        </div>
+      ) : (
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Person</th>
+                <th>Desk</th>
+              </tr>
+            </thead>
+            <tbody>
+              {occupantsForDay.map((occupant) => (
+                <tr
+                  key={`${occupant.userId}-${occupant.deskId}`}
+                  onMouseEnter={() => setHoveredDeskId(occupant.deskId)}
+                  onMouseLeave={() => setHoveredDeskId('')}
+                  onClick={() => setSelectedDeskId(occupant.deskId)}
+                >
+                  <td>
+                    <strong>{occupant.name}</strong>
+                    <p className="muted">{occupant.email}</p>
+                  </td>
+                  <td>{occupant.deskLabel}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </section>
@@ -475,6 +436,7 @@ export function App() {
           <input placeholder="Suche Person oder Desk" />
         </div>
         <div className="header-right">
+          <button className="btn btn-outline" onClick={() => { window.location.href = '/admin'; }}>Admin</button>
           <button className="btn btn-ghost" onClick={() => setDetailsSheetOpen(true)}>≡ Details</button>
           <button className="avatar-btn">👤</button>
         </div>
@@ -490,9 +452,11 @@ export function App() {
             <div className="card-header-row">
               <h2>{selectedFloorplan?.name ?? 'Floorplan'}</h2>
               <div className="toolbar">
-                {isUpdatingOccupancy && <span className="updating-indicator">Aktualisiere…</span>}
                 <button className="btn" onClick={() => setBookingDialogOpen(true)}>Buchung erstellen</button>
               </div>
+            </div>
+            <div className={`refresh-progress ${isUpdatingOccupancy ? "is-active" : ""}`} aria-hidden={!isUpdatingOccupancy}>
+              <span className="refresh-progress-bar" />
             </div>
             <div className="canvas-body">
               {isBootstrapping ? (
@@ -505,10 +469,8 @@ export function App() {
                   selectedDeskId={selectedDeskId}
                   hoveredDeskId={hoveredDeskId}
                   onHoverDesk={setHoveredDeskId}
-                  onSelectDesk={(deskId) => {
-                    setSelectedDeskId(deskId);
-                    setRightTab('details');
-                  }}
+                  onSelectDesk={setSelectedDeskId}
+                  onCanvasClick={() => setSelectedDeskId('')}
                 />
               ) : (
                 <div className="empty-state"><p>Kein Floorplan ausgewählt.</p></div>
