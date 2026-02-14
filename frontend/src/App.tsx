@@ -140,6 +140,7 @@ export function App() {
         onOpenAdmin={() => navigate('/admin')}
         currentUserEmail={user?.email}
         onLogout={logout}
+        currentUser={user as NonNullable<typeof user>}
       />
     );
   }

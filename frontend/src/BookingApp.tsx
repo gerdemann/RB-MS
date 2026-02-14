@@ -1,7 +1,9 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { API_BASE, ApiError, checkBackendHealth, get, markBackendAvailable, post } from './api';
+import { UserMenu } from './components/UserMenu';
 import { FloorplanCanvas } from './FloorplanCanvas';
+import type { AuthUser } from './auth/AuthProvider';
 
 type Floorplan = { id: string; name: string; imageUrl: string };
 type OccupancyDesk = {
@@ -47,7 +49,7 @@ const getApiErrorMessage = (error: unknown, fallback: string): string => {
   return fallback;
 };
 
-export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogout }: { onOpenAdmin: () => void; canOpenAdmin: boolean; currentUserEmail?: string; onLogout: () => Promise<void> }) {
+export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogout, currentUser }: { onOpenAdmin: () => void; canOpenAdmin: boolean; currentUserEmail?: string; onLogout: () => Promise<void>; currentUser: AuthUser }) {
   const [floorplans, setFloorplans] = useState<Floorplan[]>([]);
   const [selectedFloorplanId, setSelectedFloorplanId] = useState('');
   const [selectedDate, setSelectedDate] = useState(today);
@@ -436,9 +438,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           <input placeholder="Suche Person oder Desk" />
         </div>
         <div className="header-right">
-          {canOpenAdmin && <button className="btn btn-outline" onClick={onOpenAdmin}>Admin</button>}
           <button className="btn btn-ghost" onClick={() => setDetailsSheetOpen(true)}>≡ Details</button>
-          <button className="btn btn-outline" onClick={() => void onLogout()}>Logout</button>
+          <UserMenu user={currentUser} onLogout={onLogout} onOpenAdmin={onOpenAdmin} showAdminAction={canOpenAdmin} />
         </div>
       </header>
 

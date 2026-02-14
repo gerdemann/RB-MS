@@ -53,7 +53,14 @@ app.use(express.json());
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 type EmployeeRole = 'admin' | 'user';
-type SessionRecord = { id: string; userId: string; csrfToken: string; expiresAt: number };
+type SessionRecord = {
+  id: string;
+  userId: string;
+  csrfToken: string;
+  expiresAt: number;
+  graphAccessToken?: string;
+  graphTokenExpiresAt?: number;
+};
 type AuthUser = { id: string; email: string; displayName: string; role: EmployeeRole; isActive: boolean };
 
 declare global {
@@ -123,16 +130,31 @@ const clearSessionCookies = (res: express.Response) => {
   res.clearCookie(CSRF_COOKIE_NAME, { ...options, httpOnly: false });
 };
 
-const createSession = (userId: string): SessionRecord => {
+const createSession = (userId: string, options?: { graphAccessToken?: string; graphTokenExpiresInSeconds?: number }): SessionRecord => {
   const now = Date.now();
+  const graphTokenExpiresAt = options?.graphTokenExpiresInSeconds
+    ? now + (options.graphTokenExpiresInSeconds * 1000)
+    : undefined;
   const session: SessionRecord = {
     id: crypto.randomUUID(),
     userId,
     csrfToken: crypto.randomUUID(),
-    expiresAt: now + SESSION_TTL_MS
+    expiresAt: now + SESSION_TTL_MS,
+    ...(options?.graphAccessToken ? { graphAccessToken: options.graphAccessToken } : {}),
+    ...(graphTokenExpiresAt ? { graphTokenExpiresAt } : {})
   };
   sessions.set(session.id, session);
   return session;
+};
+
+const refreshSessionCsrf = (session: SessionRecord): SessionRecord => {
+  const refreshed = {
+    ...session,
+    csrfToken: crypto.randomUUID(),
+    expiresAt: Date.now() + SESSION_TTL_MS
+  };
+  sessions.set(refreshed.id, refreshed);
+  return refreshed;
 };
 
 const destroySession = (sessionId?: string) => {
@@ -564,7 +586,7 @@ app.get('/auth/entra/start', async (_req, res) => {
     response_type: 'code',
     redirect_uri: ENTRA_REDIRECT_URI as string,
     response_mode: 'query',
-    scope: 'openid profile email',
+    scope: 'openid profile email User.Read',
     state,
     nonce
   });
@@ -592,7 +614,7 @@ app.get('/auth/entra/callback', async (req, res) => {
         code,
         grant_type: 'authorization_code',
         redirect_uri: ENTRA_REDIRECT_URI as string,
-        scope: 'openid profile email'
+        scope: 'openid profile email User.Read'
       })
     });
 
@@ -601,7 +623,7 @@ app.get('/auth/entra/callback', async (req, res) => {
       return;
     }
 
-    const tokenPayload = await tokenResponse.json() as { id_token?: string };
+    const tokenPayload = await tokenResponse.json() as { id_token?: string; access_token?: string; expires_in?: number };
     if (!tokenPayload.id_token) {
       res.status(401).json({ code: 'OIDC_VALIDATION_FAILED', message: 'id_token is missing' });
       return;
@@ -626,7 +648,10 @@ app.get('/auth/entra/callback', async (req, res) => {
     }
 
     const user = await upsertEmployeeFromEntraLogin({ oid, tid, email, name });
-    const session = createSession(user.id);
+    const session = createSession(user.id, {
+      graphAccessToken: tokenPayload.access_token,
+      graphTokenExpiresInSeconds: tokenPayload.expires_in
+    });
     applySessionCookies(res, session);
 
     res.redirect(302, ENTRA_POST_LOGIN_REDIRECT);
@@ -675,6 +700,7 @@ app.post('/auth/login', async (req, res) => {
     res.status(200).json({
       user: {
         id: user.id,
+        name: user.displayName,
         email: user.email,
         displayName: user.displayName,
         role: user.role === 'admin' ? 'admin' : 'user'
@@ -708,11 +734,56 @@ app.get('/auth/me', (req, res) => {
   res.status(200).json({
     user: {
       id: req.authUser.id,
+      name: req.authUser.displayName,
       email: req.authUser.email,
       displayName: req.authUser.displayName,
       role: req.authUser.role
     }
   });
+});
+
+app.get('/auth/csrf', (req, res) => {
+  if (!req.authSession) {
+    res.status(204).send();
+    return;
+  }
+
+  const refreshedSession = refreshSessionCsrf(req.authSession);
+  req.authSession = refreshedSession;
+  applySessionCookies(res, refreshedSession);
+  res.status(204).send();
+});
+
+app.get('/user/me/photo', requireAuthenticated, async (req, res) => {
+  const graphAccessToken = req.authSession?.graphAccessToken;
+  const graphTokenExpiresAt = req.authSession?.graphTokenExpiresAt;
+
+  if (!graphAccessToken || !graphTokenExpiresAt || graphTokenExpiresAt <= Date.now()) {
+    res.status(204).send();
+    return;
+  }
+
+  const graphResponse = await fetch('https://graph.microsoft.com/v1.0/me/photo/$value', {
+    headers: {
+      authorization: `Bearer ${graphAccessToken}`
+    }
+  });
+
+  if (graphResponse.status === 404) {
+    res.status(204).send();
+    return;
+  }
+
+  if (!graphResponse.ok) {
+    res.status(502).json({ code: 'GRAPH_PHOTO_FETCH_FAILED', message: 'Could not load profile photo from Graph' });
+    return;
+  }
+
+  const contentType = graphResponse.headers.get('content-type') ?? 'image/jpeg';
+  const photoBuffer = Buffer.from(await graphResponse.arrayBuffer());
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  res.setHeader('Content-Type', contentType);
+  res.status(200).send(photoBuffer);
 });
 
 app.use(requireAuthenticated);
