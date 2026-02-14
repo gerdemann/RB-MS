@@ -3,6 +3,20 @@ import { API_BASE } from '../api';
 
 type UserInfo = { id?: string; name?: string; displayName?: string; email: string; role: 'admin' | 'user' };
 
+type IconProps = { size?: number; className?: string };
+
+function ChevronDown({ size = 14, className }: IconProps) {
+  return <svg className={className} xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m6 9 6 6 6-6" /></svg>;
+}
+
+function Shield({ size = 16, className }: IconProps) {
+  return <svg className={className} xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V6l8-3 8 3z" /></svg>;
+}
+
+function LogOut({ size = 16, className }: IconProps) {
+  return <svg className={className} xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="m16 17 5-5-5-5" /><path d="M21 12H9" /><path d="M13 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8" /></svg>;
+}
+
 const getInitials = (user: UserInfo): string => {
   const source = (user.name ?? user.displayName ?? user.email).trim();
   if (!source) return 'U';
@@ -28,26 +42,40 @@ export function UserMenu({ user, onLogout, onOpenAdmin, showAdminAction = false 
 
   useEffect(() => {
     setPhotoFailed(false);
-  }, [userKey]);
+  }, [userKey, displayName, user.email]);
 
   return (
     <details className="user-menu">
-      <summary className="user-chip" aria-label={`Angemeldet als ${displayName}`}>
+      <summary className="user-chip" aria-label={`User-Menü für ${displayName}`}>
         <span className="avatar" aria-hidden>
-          {!photoFailed && <img key={userKey} src={`${API_BASE}/user/me/photo?v=${encodeURIComponent(userKey)}`} alt="Profilbild" onError={() => setPhotoFailed(true)} />}
+          {!photoFailed && <img key={`${userKey}-${displayName}`} src={`${API_BASE}/user/me/photo?v=${encodeURIComponent(`${userKey}-${displayName}-${user.email}`)}`} alt="Profilbild" onError={() => setPhotoFailed(true)} />}
           {photoFailed && <span>{initials}</span>}
         </span>
-        <span className="user-chip-text">
-          <small className="muted">Angemeldet als</small>
-          <strong>{displayName}</strong>
-        </span>
+        <strong className="user-chip-name">{displayName}</strong>
+        <ChevronDown size={14} className="user-chip-chevron" />
       </summary>
-      <div className="user-menu-content">
-        <p className="muted user-menu-email">{user.email}</p>
+      <div className="user-menu-content" role="menu">
+        <div className="user-menu-summary" aria-hidden>
+          <span className="avatar avatar-sm">
+            {!photoFailed && <img key={`summary-${userKey}-${displayName}`} src={`${API_BASE}/user/me/photo?v=${encodeURIComponent(`${userKey}-${displayName}-${user.email}`)}`} alt="Profilbild" onError={() => setPhotoFailed(true)} />}
+            {photoFailed && <span>{initials}</span>}
+          </span>
+          <div className="user-menu-meta">
+            <strong>{displayName}</strong>
+            <span className="muted user-menu-email" title={user.email}>{user.email}</span>
+          </div>
+        </div>
+        <hr className="user-menu-separator" />
         {showAdminAction && user.role === 'admin' && onOpenAdmin && (
-          <button className="btn btn-ghost" onClick={onOpenAdmin}>Admin</button>
+          <button className="user-menu-item" role="menuitem" onClick={onOpenAdmin}>
+            <Shield size={16} />
+            <span>Admin</span>
+          </button>
         )}
-        <button className="btn btn-outline" onClick={() => void onLogout()}>Logout</button>
+        <button className="user-menu-item user-menu-item-danger" role="menuitem" onClick={() => void onLogout()}>
+          <LogOut size={16} />
+          <span>Logout</span>
+        </button>
       </div>
     </details>
   );
