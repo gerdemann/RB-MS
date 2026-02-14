@@ -44,6 +44,7 @@ export class ApiError extends Error {
 }
 
 type HttpMethod = 'GET' | 'POST' | 'PATCH' | 'DELETE';
+const CSRF_COOKIE_NAME = 'rbms_csrf';
 
 let backendAvailable = true;
 type AuthFailureContext = {
@@ -62,6 +63,23 @@ const readCookie = (name: string): string | null => {
     .find((part) => part.startsWith(`${name}=`));
   return match ? decodeURIComponent(match.slice(name.length + 1)) : null;
 };
+
+const isMutationMethod = (method: HttpMethod): boolean => method !== 'GET';
+
+const isCsrfFailure = (status: number, backendCode?: string): boolean => {
+  return status === 403 && (backendCode === 'CSRF_MISSING' || backendCode === 'CSRF_INVALID');
+};
+
+async function initCsrfCookie(): Promise<void> {
+  const response = await fetch(`${API_BASE}/auth/csrf`, {
+    method: 'GET',
+    credentials: 'include'
+  });
+
+  if (!response.ok) {
+    throw new Error('CSRF_INIT_FAILED');
+  }
+}
 
 const mapStatusToCode = (status: number): ApiErrorCode => {
   if (status === 401 || status === 403) return 'UNAUTHORIZED';
@@ -93,6 +111,20 @@ const toBackendCode = (body: unknown): string | undefined => {
   return undefined;
 };
 
+async function sendRequest(path: string, method: HttpMethod, payload?: unknown, signal?: AbortSignal): Promise<Response> {
+  const csrfToken = isMutationMethod(method) ? readCookie(CSRF_COOKIE_NAME) : null;
+  return fetch(`${API_BASE}${path}`, {
+    method,
+    signal,
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(csrfToken ? { 'x-csrf-token': csrfToken } : {})
+    },
+    ...(typeof payload === 'undefined' ? {} : { body: JSON.stringify(payload) })
+  });
+}
+
 async function request<T>(path: string, method: HttpMethod, payload?: unknown): Promise<T> {
   if (!backendAvailable && !path.endsWith('/health') && !path.endsWith('/api/health')) {
     throw new ApiError({
@@ -110,17 +142,19 @@ async function request<T>(path: string, method: HttpMethod, payload?: unknown): 
 
   let response: Response;
   try {
-    const csrfToken = method === 'GET' ? null : readCookie('rbms_csrf');
-    response = await fetch(`${API_BASE}${path}`, {
-      method,
-      signal: controller.signal,
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(csrfToken ? { 'x-csrf-token': csrfToken } : {})
-      },
-      ...(typeof payload === 'undefined' ? {} : { body: JSON.stringify(payload) })
-    });
+    response = await sendRequest(path, method, payload, controller.signal);
+
+    if (isMutationMethod(method)) {
+      const contentType = response.headers.get('content-type') ?? '';
+      const isJson = contentType.includes('application/json');
+      const body = isJson ? await response.clone().json() : await response.clone().text();
+      const backendCode = toBackendCode(body);
+
+      if (isCsrfFailure(response.status, backendCode)) {
+        await initCsrfCookie();
+        response = await sendRequest(path, method, payload, controller.signal);
+      }
+    }
   } catch {
     backendAvailable = false;
     throw new ApiError({
@@ -179,6 +213,12 @@ async function request<T>(path: string, method: HttpMethod, payload?: unknown): 
 
   backendAvailable = true;
   return body as T;
+}
+
+export async function ensureCsrfCookie(): Promise<void> {
+  if (!readCookie(CSRF_COOKIE_NAME)) {
+    await initCsrfCookie();
+  }
 }
 
 export async function checkBackendHealth(): Promise<boolean> {

@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { del, get, patch, post } from '../api';
+import { UserMenu } from '../components/UserMenu';
 import { FloorplanCanvas } from '../FloorplanCanvas';
 
 type Floorplan = { id: string; name: string; imageUrl: string; createdAt?: string; updatedAt?: string };
@@ -7,8 +8,8 @@ type Desk = { id: string; floorplanId: string; name: string; x: number; y: numbe
 type Employee = { id: string; email: string; displayName: string; role: 'admin' | 'user'; isActive: boolean; createdAt?: string; updatedAt?: string };
 type Booking = { id: string; deskId: string; userEmail: string; userDisplayName?: string; date: string; createdAt?: string; updatedAt?: string };
 type Toast = { id: number; tone: 'success' | 'error'; message: string };
-type RouteProps = { path: string; navigate: (to: string) => void; onRoleStateChanged: () => Promise<void>; onLogout: () => Promise<void> };
-type AdminSession = { id?: string; email: string; displayName: string; role: 'admin' | 'user'; isActive?: boolean };
+type RouteProps = { path: string; navigate: (to: string) => void; onRoleStateChanged: () => Promise<void>; onLogout: () => Promise<void>; currentUser?: AdminSession | null };
+type AdminSession = { id?: string; email: string; name?: string; displayName?: string; role: 'admin' | 'user'; isActive?: boolean };
 type DataState = { loading: boolean; error: string; ready: boolean };
 
 type DeskFormState = {
@@ -84,7 +85,7 @@ function RowMenu({ onEdit, onDelete, onExtra, extraLabel }: { onEdit: () => void
   );
 }
 
-function AdminLayout({ path, navigate, title, actions, children, onLogout }: { path: string; navigate: (to: string) => void; title: string; actions?: ReactNode; children: ReactNode; onLogout: () => Promise<void> }) {
+function AdminLayout({ path, navigate, title, actions, children, onLogout, currentUser }: { path: string; navigate: (to: string) => void; title: string; actions?: ReactNode; children: ReactNode; onLogout: () => Promise<void>; currentUser: AdminSession | null }) {
   const current = basePath(path);
   return (
     <main className="app-shell">
@@ -92,7 +93,7 @@ function AdminLayout({ path, navigate, title, actions, children, onLogout }: { p
         <aside className="card admin-sidebar-v2 stack-sm">
           <h3>RB-MS Admin</h3>
           {navItems.map((item) => <button key={item.to} className={`btn btn-ghost admin-nav-link ${current === item.to ? 'active' : ''}`} onClick={() => navigate(item.to)}>{item.label}</button>)}
-          <button className="btn btn-outline" onClick={async () => { await onLogout(); navigate('/login'); }}>Logout</button>
+          {currentUser && <UserMenu user={currentUser} onLogout={async () => { await onLogout(); navigate('/login'); }} />}
         </aside>
         <section className="admin-content-v2 stack-sm">
           <header className="card admin-topbar-v2"><div><p className="muted">Admin / {title}</p><strong>{title}</strong></div><div className="inline-end"><button className="btn btn-outline" onClick={() => navigate('/')}>Zurück zur App</button>{actions}</div></header>
@@ -103,7 +104,7 @@ function AdminLayout({ path, navigate, title, actions, children, onLogout }: { p
   );
 }
 
-function DashboardPage({ path, navigate, onLogout }: RouteProps) {
+function DashboardPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const [state, setState] = useState<DataState>({ loading: true, error: '', ready: false });
   const [employees, setEmployees] = useState<Employee[]>([]);
   const [floorplans, setFloorplans] = useState<Floorplan[]>([]);
@@ -135,7 +136,7 @@ function DashboardPage({ path, navigate, onLogout }: RouteProps) {
   const recent = [...bookings].sort((a, b) => new Date(b.createdAt ?? b.date).getTime() - new Date(a.createdAt ?? a.date).getTime()).slice(0, 12);
 
   return (
-    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Dashboard">
+    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Dashboard" currentUser={currentUser ?? null}>
       {state.error && <ErrorState text={state.error} onRetry={load} />}
       <section className="dashboard-grid">
         {[{ label: 'Aktive Mitarbeiter', value: employees.filter((e) => e.isActive).length, icon: '👥', to: '/admin/employees' }, { label: 'Desks', value: desks.length, icon: '🖱️', to: '/admin/desks' }, { label: 'Floorpläne', value: floorplans.length, icon: '🗺️', to: '/admin/floorplans' }, { label: 'Buchungen (7 Tage)', value: bookingsNextWeek, icon: '📅', to: '/admin/bookings' }].map((card) => (
@@ -169,7 +170,7 @@ function DashboardPage({ path, navigate, onLogout }: RouteProps) {
   );
 }
 
-function FloorplansPage({ path, navigate, onLogout }: RouteProps) {
+function FloorplansPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const toasts = useToasts();
   const [state, setState] = useState<DataState>({ loading: true, error: '', ready: false });
   const [floorplans, setFloorplans] = useState<Floorplan[]>([]);
@@ -195,7 +196,7 @@ function FloorplansPage({ path, navigate, onLogout }: RouteProps) {
   const filtered = useMemo(() => floorplans.filter((plan) => plan.name.toLowerCase().includes(query.toLowerCase())), [floorplans, query]);
 
   return (
-    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Floorpläne" actions={<button className="btn" onClick={() => setShowCreate(true)}>Neu</button>}>
+    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Floorpläne" actions={<button className="btn" onClick={() => setShowCreate(true)}>Neu</button>} currentUser={currentUser ?? null}>
       <section className="card stack-sm">
         <div className="crud-toolbar"><div className="inline-between"><h3>Floorpläne</h3><Badge>{filtered.length}</Badge></div><div className="admin-search">🔎<input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Floorplan suchen" /></div></div>
         {state.error && <ErrorState text={state.error} onRetry={load} />}
@@ -279,7 +280,7 @@ function DeskEditor({ desk, floorplans, defaultFloorplanId, initialPosition, loc
   );
 }
 
-function DesksPage({ path, navigate, onLogout }: RouteProps) {
+function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const toasts = useToasts();
   const [state, setState] = useState<DataState>({ loading: true, error: '', ready: false });
   const [floorplans, setFloorplans] = useState<Floorplan[]>([]);
@@ -378,7 +379,7 @@ function DesksPage({ path, navigate, onLogout }: RouteProps) {
   };
 
   return (
-    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Desks">
+    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Desks" currentUser={currentUser ?? null}>
       <section className="card stack-sm">
         <div className="crud-toolbar"><div className="inline-between"><h3>Desks</h3><Badge>{filtered.length}</Badge></div><div className="admin-toolbar admin-toolbar-wrap"><select value={floorplanId} onChange={(e) => { setFloorplanId(e.target.value); setSelectedDeskId(''); cancelModes(); }}><option value="">Floorplan wählen</option>{floorplans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select><div className="admin-search">🔎<input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Desk suchen" /></div><button className="btn" disabled={!floorplanId} onClick={startCreateMode}>Neuer Desk</button>{canvasMode !== 'idle' && <button className="btn btn-outline" onClick={cancelModes}>Abbrechen</button>}</div></div>
         {state.error && <ErrorState text={state.error} onRetry={() => void loadDesks(floorplanId)} />}
@@ -403,7 +404,7 @@ function DesksPage({ path, navigate, onLogout }: RouteProps) {
   );
 }
 
-function BookingsPage({ path, navigate, onLogout }: RouteProps) {
+function BookingsPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const toasts = useToasts();
   const [state, setState] = useState<DataState>({ loading: true, error: '', ready: false });
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -445,7 +446,7 @@ function BookingsPage({ path, navigate, onLogout }: RouteProps) {
   }), [bookings, desks, deskId, floorplanId, personQuery]);
 
   return (
-    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Buchungen" actions={<button className="btn" onClick={() => setCreating(true)}>Neu</button>}>
+    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Buchungen" actions={<button className="btn" onClick={() => setCreating(true)}>Neu</button>} currentUser={currentUser ?? null}>
       <section className="card stack-sm">
         <div className="crud-toolbar"><div className="inline-between"><h3>Buchungen</h3><Badge>{filtered.length}</Badge></div><div className="admin-toolbar admin-toolbar-wrap"><input type="date" value={from} onChange={(e) => setFrom(e.target.value)} /><input type="date" value={to} onChange={(e) => setTo(e.target.value)} /><select value={floorplanId} onChange={(e) => setFloorplanId(e.target.value)}><option value="">Alle Floorpläne</option>{floorplans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select><select value={deskId} onChange={(e) => setDeskId(e.target.value)}><option value="">Alle Desks</option>{desks.filter((desk) => (floorplanId ? desk.floorplanId === floorplanId : true)).map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select><div className="admin-search">🔎<input value={personQuery} onChange={(e) => setPersonQuery(e.target.value)} placeholder="Person suchen" /></div></div></div>
         {state.error && <ErrorState text={state.error} onRetry={load} />}
@@ -480,7 +481,7 @@ function BookingEditor({ booking, desks, employees, onClose, onSaved, onError }:
   return <div className="overlay"><section className="card dialog stack-sm"><h3>{booking ? 'Buchung bearbeiten' : 'Buchung anlegen'}</h3><form className="stack-sm" onSubmit={submit}><select required value={deskId} onChange={(e) => setDeskId(e.target.value)}>{desks.map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select><input required type="date" value={date} onChange={(e) => setDate(e.target.value)} /><select required value={userEmail} onChange={(e) => setUserEmail(e.target.value)}>{employees.map((employee) => <option key={employee.id} value={employee.email}>{employee.displayName} ({employee.email})</option>)}</select><div className="inline-end"><button className="btn btn-outline" type="button" onClick={onClose}>Abbrechen</button><button className="btn">Speichern</button></div></form></section></div>;
 }
 
-function EmployeesPage({ path, navigate, onRoleStateChanged, onLogout, currentAdminEmail }: RouteProps & { currentAdminEmail: string }) {
+function EmployeesPage({ path, navigate, onRoleStateChanged, onLogout, currentAdminEmail, currentUser }: RouteProps & { currentAdminEmail: string }) {
   const toasts = useToasts();
   const [state, setState] = useState<DataState>({ loading: true, error: '', ready: false });
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -529,7 +530,7 @@ function EmployeesPage({ path, navigate, onRoleStateChanged, onLogout, currentAd
 
 
   return (
-    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Mitarbeiter" actions={<button className="btn" onClick={() => setCreating(true)}>Neu</button>}>
+    <AdminLayout path={path} navigate={navigate} onLogout={onLogout} title="Mitarbeiter" actions={<button className="btn" onClick={() => setCreating(true)}>Neu</button>} currentUser={currentUser ?? null}>
       <section className="card stack-sm">
         <div className="crud-toolbar"><div className="inline-between"><h3>Mitarbeiter</h3><Badge>{filtered.length}</Badge></div><div className="admin-search">🔎<input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Name oder E-Mail" /></div></div>
         {state.error && <ErrorState text={state.error} onRetry={load} />}
@@ -576,11 +577,11 @@ export function AdminRouter({ path, navigate, onRoleStateChanged, onLogout }: Ro
     })();
   }, []);
 
-  if (route === '/admin') return <DashboardPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} />;
-  if (route === '/admin/floorplans') return <FloorplansPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} />;
-  if (route === '/admin/desks') return <DesksPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} />;
-  if (route === '/admin/bookings') return <BookingsPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} />;
-  if (route === '/admin/employees') return <EmployeesPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentAdminEmail={adminSession?.email ?? ''} />;
+  if (route === '/admin') return <DashboardPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentUser={adminSession} />;
+  if (route === '/admin/floorplans') return <FloorplansPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentUser={adminSession} />;
+  if (route === '/admin/desks') return <DesksPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentUser={adminSession} />;
+  if (route === '/admin/bookings') return <BookingsPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentUser={adminSession} />;
+  if (route === '/admin/employees') return <EmployeesPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentAdminEmail={adminSession?.email ?? ''} currentUser={adminSession} />;
 
   return <main className="app-shell"><section className="card stack-sm down-card"><h2>Admin-Seite nicht gefunden</h2><button className="btn" onClick={() => navigate('/admin')}>Zum Dashboard</button></section></main>;
 }
