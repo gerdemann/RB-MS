@@ -10,6 +10,7 @@ type FloorplanDesk = {
   booking: { userDisplayName?: string; userEmail: string; userPhotoUrl?: string } | null;
   isCurrentUsersDesk?: boolean;
   isHighlighted?: boolean;
+  isSelected?: boolean;
 };
 
 type OverlayRect = { left: number; top: number; width: number; height: number };
@@ -74,7 +75,7 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
             <button
               key={desk.id}
               type="button"
-              className={`desk-pin ${desk.status} ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''} ${desk.isCurrentUsersDesk ? 'is-own-desk' : ''} ${desk.isHighlighted ? 'is-highlighted' : ''}`}
+              className={`desk-pin ${desk.status} ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''} ${desk.isCurrentUsersDesk ? 'is-own-desk' : ''} ${desk.isHighlighted ? 'is-highlighted' : ''} ${desk.isSelected ? 'is-selected' : ''}`}
               style={{ left: `${toNormalized(desk.x, overlayRect.width) * overlayRect.width}px`, top: `${toNormalized(desk.y, overlayRect.height) * overlayRect.height}px` }}
               onMouseEnter={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();

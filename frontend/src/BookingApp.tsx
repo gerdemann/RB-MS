@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { API_BASE, ApiError, checkBackendHealth, get, markBackendAvailable, post } from './api';
+import { API_BASE, ApiError, checkBackendHealth, get, markBackendAvailable, post, put } from './api';
 import { UserMenu } from './components/UserMenu';
 import { FloorplanCanvas } from './FloorplanCanvas';
 import type { AuthUser } from './auth/AuthProvider';
@@ -19,6 +19,7 @@ type OccupancyResponse = { date: string; floorplanId: string; desks: OccupancyDe
 type BookingEmployee = { id: string; email: string; displayName: string; photoUrl?: string };
 type OccupantForDay = { deskId: string; deskLabel: string; userId: string; name: string; email: string; employeeId?: string; photoUrl?: string };
 type BookingMode = 'single' | 'range' | 'series';
+type OverrideDialogState = { existingBookingId: string; existingDeskName: string; nextDeskName: string; date: string };
 
 const today = new Date().toISOString().slice(0, 10);
 const weekdays = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'];
@@ -70,6 +71,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const [backendDown, setBackendDown] = useState(false);
 
   const [bookingDialogOpen, setBookingDialogOpen] = useState(false);
+  const [overrideDialog, setOverrideDialog] = useState<OverrideDialogState | null>(null);
 
   const [bookingMode, setBookingMode] = useState<BookingMode>('single');
   const [rangeStartDate, setRangeStartDate] = useState(selectedDate);
@@ -84,20 +86,24 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
   const selectedFloorplan = useMemo(() => floorplans.find((f) => f.id === selectedFloorplanId) ?? null, [floorplans, selectedFloorplanId]);
   const employeesByEmail = useMemo(() => new Map(employees.map((employee) => [employee.email.toLowerCase(), employee])), [employees]);
+  const employeesById = useMemo(() => new Map(employees.map((employee) => [employee.id, employee])), [employees]);
   const desks = useMemo(() => (occupancy?.desks ?? []).map((desk) => {
     if (!desk.booking) return desk;
-    const employee = employeesByEmail.get(desk.booking.userEmail.toLowerCase());
+    const employee = desk.booking.employeeId ? employeesById.get(desk.booking.employeeId) : employeesByEmail.get(desk.booking.userEmail.toLowerCase());
+    const fallbackPhotoUrl = currentUserEmail && desk.booking.userEmail.toLowerCase() === currentUserEmail.toLowerCase()
+      ? `${API_BASE}/user/me/photo?v=${encodeURIComponent(currentUserEmail)}`
+      : undefined;
     return {
       ...desk,
       booking: {
         ...desk.booking,
         employeeId: desk.booking.employeeId ?? employee?.id,
         userDisplayName: desk.booking.userDisplayName ?? employee?.displayName,
-        userPhotoUrl: desk.booking.userPhotoUrl ?? employee?.photoUrl
+        userPhotoUrl: desk.booking.userPhotoUrl ?? employee?.photoUrl ?? fallbackPhotoUrl
       },
       isCurrentUsersDesk: Boolean(currentUserEmail && desk.booking.userEmail.toLowerCase() === currentUserEmail.toLowerCase())
     };
-  }), [occupancy?.desks, employeesByEmail, currentUserEmail]);
+  }), [occupancy?.desks, employeesByEmail, employeesById, currentUserEmail]);
   const filteredDesks = useMemo(() => (onlyFree ? desks.filter((desk) => desk.status === 'free') : desks).map((desk) => ({ ...desk, isHighlighted: desk.id === highlightedDeskId })), [desks, onlyFree, highlightedDeskId]);
   const selectedDesk = useMemo(() => desks.find((desk) => desk.id === selectedDeskId) ?? null, [desks, selectedDeskId]);
   const occupantsForDay = useMemo<OccupantForDay[]>(
@@ -230,8 +236,36 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       throw new Error('Bitte Desk auswählen.');
     }
 
+    const existingBooking = desks.find((desk) => desk.booking && desk.booking.userEmail.toLowerCase() === selectedEmployeeEmail.toLowerCase())?.booking;
+    const existingDesk = desks.find((desk) => desk.booking?.id === existingBooking?.id);
+
+    if (existingBooking && existingBooking.id && existingBooking.id !== '' && existingDesk && existingDesk.id !== selectedDeskId) {
+      const nextDesk = desks.find((desk) => desk.id === selectedDeskId);
+      setOverrideDialog({
+        existingBookingId: existingBooking.id,
+        existingDeskName: existingDesk.name,
+        nextDeskName: nextDesk?.name ?? selectedDeskId,
+        date: selectedDate
+      });
+      return;
+    }
+
+    if (existingBooking && existingDesk?.id === selectedDeskId) {
+      setToastMessage('Dieser Platz ist bereits gebucht.');
+      return;
+    }
+
     await post('/bookings', { deskId: selectedDeskId, userEmail: selectedEmployeeEmail, date: selectedDate });
     setToastMessage('Einzelbuchung erstellt.');
+  };
+
+  const confirmOverrideBooking = async () => {
+    if (!overrideDialog || !selectedDeskId) return;
+    await put(`/bookings/${overrideDialog.existingBookingId}`, { deskId: selectedDeskId });
+    setOverrideDialog(null);
+    setToastMessage('Buchung aktualisiert.');
+    setBookingDialogOpen(false);
+    await refreshData();
   };
 
   const createRangeBooking = async () => {
@@ -604,6 +638,20 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
               <div className="inline-end"><button type="button" className="btn btn-outline" onClick={() => setBookingDialogOpen(false)}>Abbrechen</button><button className="btn" type="submit">Speichern</button></div>
             </form>
+          </div>
+        </div>,
+        document.body
+      )}
+
+      {overrideDialog && createPortal(
+        <div className="overlay" onClick={() => setOverrideDialog(null)}>
+          <div className="dialog card stack-sm" onClick={(event) => event.stopPropagation()}>
+            <h3>Buchung überschreiben?</h3>
+            <p>Du hast am {new Date(`${overrideDialog.date}T00:00:00.000Z`).toLocaleDateString('de-DE')} bereits {overrideDialog.existingDeskName} gebucht. Wenn du fortfährst, wird diese Buchung durch {overrideDialog.nextDeskName} ersetzt.</p>
+            <div className="inline-end">
+              <button type="button" className="btn btn-outline" onClick={() => setOverrideDialog(null)}>Abbrechen</button>
+              <button type="button" className="btn btn-danger" onClick={() => void confirmOverrideBooking()}>Überschreiben</button>
+            </div>
           </div>
         </div>,
         document.body
