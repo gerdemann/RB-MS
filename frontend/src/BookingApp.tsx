@@ -6,7 +6,7 @@ import { BookingForm, createDefaultBookingFormValues } from './components/Bookin
 import type { BookingFormSubmitPayload, BookingFormValues } from './components/BookingForm';
 import { UserMenu } from './components/UserMenu';
 import { FloorplanCanvas } from './FloorplanCanvas';
-import { APP_TITLE } from './config';
+import { APP_TITLE, COMPANY_LOGO_URL } from './config';
 import type { AuthUser } from './auth/AuthProvider';
 import { useToast } from './components/toast';
 import { resourceKindLabel } from './resourceKinds';
@@ -812,7 +812,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     <main className="app-shell">
       <header className="app-header simplified-header compact-topbar">
         <div className="header-left">
-          <span className="brand-mark" aria-hidden="true">A</span>
+          {COMPANY_LOGO_URL ? <img className="brand-logo" src={COMPANY_LOGO_URL} alt={`${APP_TITLE} Logo`} /> : <span className="brand-mark" aria-hidden="true">A</span>}
           <h1>{APP_TITLE}</h1>
           <label className="field-inline">
             <span>Standort</span>

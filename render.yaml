@@ -25,6 +25,8 @@ services:
         sync: false
       - key: RUN_SEED
         value: "false"
+      - key: APP_TITLE
+        value: RB-MS
 
   - type: web
     name: rbms-frontend
@@ -35,6 +37,10 @@ services:
     autoDeploy: true
     envVars:
       - key: VITE_API_BASE_URL
+        sync: false
+      - key: VITE_PAGE_TITLE
+        value: RB-MS
+      - key: COMPANY_LOGO_URL
         sync: false
     routes:
       - type: rewrite
