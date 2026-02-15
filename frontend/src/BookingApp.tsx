@@ -25,7 +25,7 @@ type OccupancyResponse = { date: string; floorplanId: string; desks: OccupancyDe
 type BookingEmployee = { id: string; email: string; displayName: string; photoUrl?: string };
 type OccupantForDay = { deskId: string; deskLabel: string; userId: string; name: string; email: string; employeeId?: string; photoUrl?: string };
 type BookingSubmitPayload = BookingFormSubmitPayload;
-type BookingDialogState = 'IDLE' | 'BOOKING_OPEN' | 'SUBMITTING';
+type BookingDialogState = 'IDLE' | 'BOOKING_OPEN' | 'SUBMITTING' | 'CONFLICT_REVIEW';
 type RebookConfirmState = {
   deskId: string;
   deskLabel: string;
@@ -264,11 +264,9 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const filteredDesks = useMemo(() => (onlyFree ? desks.filter((desk) => desk.status === 'free') : desks).map((desk) => ({ ...desk, isHighlighted: desk.id === highlightedDeskId })), [desks, onlyFree, highlightedDeskId]);
   const bookingsForSelectedDate = useMemo<OccupantForDay[]>(() => mapBookingsForDay(desks), [desks]);
   const bookingsForToday = useMemo<OccupantForDay[]>(() => mapBookingsForDay(desksToday), [desksToday]);
-  const activeDialogDeskRef = deskPopup;
   const visibleTodayAvatars = useMemo(() => bookingsForToday.slice(0, 5), [bookingsForToday]);
   const hiddenTodayCount = Math.max(0, bookingsForToday.length - visibleTodayAvatars.length);
-  const activeDialogDeskRef = bookingDialogState === 'CONFLICT_REVIEW' ? conflictReview : deskPopup;
-  const popupDesk = useMemo(() => (activeDialogDeskRef ? desks.find((desk) => desk.id === activeDialogDeskRef.deskId) ?? null : null), [desks, activeDialogDeskRef]);
+  const popupDesk = useMemo(() => (deskPopup ? desks.find((desk) => desk.id === deskPopup.deskId) ?? null : null), [desks, deskPopup]);
   const popupDeskState = popupDesk ? (!popupDesk.booking ? 'FREE' : popupDesk.isCurrentUsersDesk ? 'MINE' : 'TAKEN') : null;
   const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
 
@@ -353,18 +351,18 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   }, []);
 
   useLayoutEffect(() => {
-    if (!activeDialogDeskRef || !popupRef.current) {
+    if (!deskPopup || !popupRef.current) {
       setDeskPopupCoords(null);
       return;
     }
 
-    const anchorRect = activeDialogDeskRef.anchorEl.getBoundingClientRect();
+    const anchorRect = deskPopup.anchorEl.getBoundingClientRect();
     const popupRect = popupRef.current.getBoundingClientRect();
     setDeskPopupCoords(calculatePopupCoordinates(anchorRect, popupRect));
-  }, [activeDialogDeskRef, bookingDialogState, popupDeskState, dialogErrorMessage]);
+  }, [deskPopup, bookingDialogState, popupDeskState, dialogErrorMessage]);
 
   useEffect(() => {
-    if (!activeDialogDeskRef) return;
+    if (!deskPopup) return;
 
     const closePopup = () => {
       setDeskPopup(null);
@@ -385,7 +383,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       const target = event.target;
       if (!(target instanceof Node)) return;
       if (popupRef.current?.contains(target)) return;
-      if (activeDialogDeskRef.anchorEl.contains(target)) return;
+      if (deskPopup.anchorEl.contains(target)) return;
       closePopup();
     };
 
@@ -404,7 +402,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       window.removeEventListener('wheel', closeOnViewportChange);
       window.removeEventListener('resize', closeOnViewportChange);
     };
-  }, [activeDialogDeskRef]);
+  }, [deskPopup]);
 
   const triggerDeskHighlight = (deskId: string, hold = 1300) => {
     setHighlightedDeskId(deskId);
@@ -531,7 +529,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       if (isUserBookingConflictError(error)) {
         setDeskPopup(null);
         setDeskPopupCoords(null);
-        setBookingDialogState('IDLE');
+        setBookingDialogState('CONFLICT_REVIEW');
         setDialogErrorMessage('');
         setRebookErrorMessage('');
         setIsRebooking(false);
@@ -822,7 +820,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         <aside className="right-col desktop-right">{isBootstrapping ? <div className="card skeleton h-480" /> : detailPanel}</aside>
       </section>
 
-      {activeDialogDeskRef && popupDesk && popupDeskState && createPortal(
+      {deskPopup && popupDesk && popupDeskState && createPortal(
         <section
           ref={popupRef}
           className="card desk-popup"
