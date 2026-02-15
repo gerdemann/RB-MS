@@ -21,7 +21,7 @@ type OccupancyDesk = {
   x: number;
   y: number;
   status: 'free' | 'booked';
-  booking: { id?: string; employeeId?: string; userEmail: string; userDisplayName?: string; userFirstName?: string; userPhotoUrl?: string; type?: 'single' | 'recurring'; daySlot?: 'AM' | 'PM' | 'FULL'; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string } | null;
+  booking: { id?: string; employeeId?: string; userEmail: string; userDisplayName?: string; userFirstName?: string; userPhotoUrl?: string; type?: 'single' | 'recurring'; daySlot?: 'AM' | 'PM' | 'FULL'; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string; isCurrentUser?: boolean } | null;
   bookings?: Array<{ id?: string; employeeId?: string; userEmail: string; userDisplayName?: string; userFirstName?: string; userPhotoUrl?: string; type?: 'single' | 'recurring'; daySlot?: 'AM' | 'PM' | 'FULL'; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string; isCurrentUser?: boolean }>;
   isCurrentUsersDesk?: boolean;
   isHighlighted?: boolean;
@@ -51,7 +51,9 @@ type BulkBookingResponse = {
   skippedDates?: string[];
 };
 type DeskPopupState = { deskId: string; anchorEl: HTMLElement };
+type CancelConfirmContext = DeskPopupState & { bookingId: string; bookingLabel: string; isRecurring: boolean; keepPopoverOpen: boolean };
 type OccupancyBooking = NonNullable<OccupancyDesk['booking']>;
+type RoomBookingListEntry = { id: string; start: number; end: number; label: string; person: string; bookingId?: string; isCurrentUser: boolean; isRecurring: boolean };
 type DeskSlotAvailability = 'FREE' | 'AM_BOOKED' | 'PM_BOOKED' | 'FULL_BOOKED';
 type PopupPlacement = 'top' | 'right' | 'bottom' | 'left';
 type PopupCoordinates = { left: number; top: number; placement: PopupPlacement };
@@ -410,7 +412,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const [rebookConfirm, setRebookConfirm] = useState<RebookConfirmState | null>(null);
   const [isRebooking, setIsRebooking] = useState(false);
   const [cancelFlowState, setCancelFlowState] = useState<CancelFlowState>('NONE');
-  const [cancelConfirmContext, setCancelConfirmContext] = useState<DeskPopupState | null>(null);
+  const [cancelConfirmContext, setCancelConfirmContext] = useState<CancelConfirmContext | null>(null);
   const [isCancellingBooking, setIsCancellingBooking] = useState(false);
   const [cancelDialogError, setCancelDialogError] = useState('');
 
@@ -450,21 +452,25 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     return [{ start, end }];
   })), [popupDeskBookings]);
   const popupRoomFreeIntervals = useMemo(() => toFreeIntervals(popupRoomOccupiedIntervals), [popupRoomOccupiedIntervals]);
-  const popupRoomBookingsList = useMemo(() => popupDeskBookings
-    .map((booking) => {
+  const popupRoomBookingsList = useMemo<RoomBookingListEntry[]>(() => popupDeskBookings
+    .flatMap((booking) => {
       const start = toMinutes(booking.startTime);
       const end = toMinutes(booking.endTime);
-      if (start === null || end === null || end <= start) return null;
-      return {
+      if (start === null || end === null || end <= start) return [];
+      const bookingEmail = booking.userEmail.toLowerCase();
+      const isCurrentUser = Boolean(booking.isCurrentUser || (currentUser?.id && booking.employeeId === currentUser.id) || (currentUserEmail && bookingEmail === currentUserEmail.toLowerCase()));
+      return [{
         id: booking.id ?? `${booking.userEmail}-${booking.startTime}-${booking.endTime}`,
         start,
         end,
         label: `${formatMinutesAsTime(start)} – ${formatMinutesAsTime(end)}`,
         person: booking.userDisplayName ?? booking.userEmail,
-      };
+        bookingId: booking.id,
+        isCurrentUser,
+        isRecurring: booking.type === 'recurring'
+      }];
     })
-    .filter((entry): entry is { id: string; start: number; end: number; label: string; person: string } => Boolean(entry))
-    .sort((a, b) => a.start - b.start), [popupDeskBookings]);
+    .sort((a, b) => a.start - b.start), [popupDeskBookings, currentUser?.id, currentUserEmail]);
   const popupRoomFreeSlotChips = useMemo(() => popupRoomFreeIntervals
     .filter((interval) => interval.end - interval.start >= 30)
     .map((interval) => ({
@@ -483,6 +489,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   }, [popupDesk, bookingFormValues.startTime, bookingFormValues.endTime, popupRoomOccupiedIntervals]);
   const popupDeskState = popupDesk ? (!canBookDesk(popupDesk) ? (popupDesk.isCurrentUsersDesk ? 'MINE' : 'TAKEN') : 'FREE') : null;
   const cancelConfirmDesk = useMemo(() => (cancelConfirmContext ? desks.find((desk) => desk.id === cancelConfirmContext.deskId) ?? null : null), [desks, cancelConfirmContext]);
+  const cancelConfirmBookingLabel = cancelConfirmContext?.bookingLabel ?? bookingSlotLabel(cancelConfirmDesk?.booking);
   const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
 
   const loadOccupancy = async (floorplanId: string, date: string) => {
@@ -694,7 +701,15 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
   const openCancelConfirm = () => {
     if (!deskPopup || !popupDesk || popupDeskState !== 'MINE') return;
-    setCancelConfirmContext(deskPopup);
+    const ownBooking = normalizeDeskBookings(popupDesk).find((booking) => booking.isCurrentUser && booking.id);
+    if (!ownBooking?.id) return;
+    setCancelConfirmContext({
+      ...deskPopup,
+      bookingId: ownBooking.id,
+      bookingLabel: bookingSlotLabel(ownBooking),
+      isRecurring: ownBooking.type === 'recurring',
+      keepPopoverOpen: false
+    });
     setDeskPopup(null);
     setDeskPopupCoords(null);
     setCancelDialogError('');
@@ -710,7 +725,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
     setCancelDialogError('');
     setIsCancellingBooking(false);
-    setDeskPopup(cancelConfirmContext);
+    setDeskPopup({ deskId: cancelConfirmContext.deskId, anchorEl: cancelConfirmContext.anchorEl });
     setCancelFlowState('DESK_POPOVER_OPEN');
   };
 
@@ -829,9 +844,28 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     setRebookConfirm(null);
   };
 
+  const handleRoomBookingCancel = (bookingId: string) => {
+    if (!deskPopup || !popupDesk || !isRoomResource(popupDesk)) return;
+    const selectedBooking = popupRoomBookingsList.find((booking) => booking.id === bookingId);
+    if (!selectedBooking || !selectedBooking.isCurrentUser || !selectedBooking.bookingId) return;
+
+    setCancelConfirmContext({
+      ...deskPopup,
+      bookingId: selectedBooking.bookingId,
+      bookingLabel: selectedBooking.label,
+      isRecurring: selectedBooking.isRecurring,
+      keepPopoverOpen: true
+    });
+    setDeskPopup(null);
+    setDeskPopupCoords(null);
+    setCancelDialogError('');
+    setIsCancellingBooking(false);
+    setCancelFlowState('CANCEL_CONFIRM_OPEN');
+  };
+
   const submitPopupCancel = async () => {
-    if (!cancelConfirmDesk || !cancelConfirmDesk.isCurrentUsersDesk) return;
-    if (cancelConfirmDesk.booking?.type === 'recurring') {
+    if (!cancelConfirmDesk || !cancelConfirmContext) return;
+    if (cancelConfirmContext.isRecurring) {
       toast.error('Serienbuchungen können aktuell nur im Admin-Modus storniert werden.');
       return;
     }
@@ -840,18 +874,23 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     setIsCancellingBooking(true);
 
     try {
-      const bookingId = desks.find((desk) => desk.id === cancelConfirmDesk.id)?.booking?.id;
-      if (!bookingId) {
-        throw new Error('Eigene Buchung konnte nicht gefunden werden.');
-      }
-
-      await del(`/bookings/${bookingId}`);
+      await del(`/bookings/${cancelConfirmContext.bookingId}`);
       toast.success('Buchung storniert', { deskId: cancelConfirmDesk.id });
-      closeBookingFlow();
       await reloadBookings();
       setBookingVersion((value) => value + 1);
-    } catch (error) {
-      setCancelDialogError(error instanceof Error ? error.message : 'Stornierung fehlgeschlagen. Bitte erneut versuchen.');
+
+      setCancelDialogError('');
+      setIsCancellingBooking(false);
+      if (cancelConfirmContext.keepPopoverOpen) {
+        setCancelFlowState('DESK_POPOVER_OPEN');
+        setDeskPopup({ deskId: cancelConfirmContext.deskId, anchorEl: cancelConfirmContext.anchorEl });
+      } else {
+        setCancelFlowState('NONE');
+        setDeskPopup(null);
+      }
+      setCancelConfirmContext(null);
+    } catch (_error) {
+      setCancelDialogError('Stornieren fehlgeschlagen');
       setIsCancellingBooking(false);
     }
   };
@@ -1115,13 +1154,20 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                 resourceKind={popupDesk.kind}
                 roomSchedule={isRoomResource(popupDesk)
                   ? {
-                    bookings: popupRoomBookingsList,
+                    bookings: popupRoomBookingsList.map((booking) => ({
+                      id: booking.id,
+                      label: booking.label,
+                      person: booking.person,
+                      isCurrentUser: booking.isCurrentUser,
+                      canCancel: booking.isCurrentUser && Boolean(booking.bookingId)
+                    })),
                     freeSlots: popupRoomFreeSlotChips,
                     isFullyBooked: popupRoomFreeSlotChips.length === 0,
                     conflictMessage: roomBookingConflict,
                     onSelectFreeSlot: (startTime, endTime) => {
                       setBookingFormValues((current) => ({ ...current, startTime, endTime }));
-                    }
+                    },
+                    onBookingClick: handleRoomBookingCancel
                   }
                   : undefined}
               />
@@ -1162,13 +1208,13 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         <div className="overlay" role="presentation">
           <section className="card dialog stack-sm cancel-booking-dialog" role="alertdialog" aria-modal="true" aria-labelledby="cancel-booking-title">
             <h3 id="cancel-booking-title">Buchung stornieren?</h3>
-            <p>Möchtest du die Buchung für {resourceKindLabel(cancelConfirmDesk.kind)} {cancelConfirmDesk.name} am {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')} wirklich stornieren?</p>
-            <p className="muted cancel-booking-subline">Zeitraum: {bookingSlotLabel(cancelConfirmDesk.booking)}</p>
+            <p>Möchtest du deine Buchung von {cancelConfirmBookingLabel.replace(' – ', ' bis ')} stornieren?</p>
+            <p className="muted cancel-booking-subline">{resourceKindLabel(cancelConfirmDesk.kind)}: {cancelConfirmDesk.name} · {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
             {cancelDialogError && <p className="error-banner">{cancelDialogError}</p>}
             <div className="inline-end">
               <button type="button" className="btn btn-outline" onClick={cancelCancelConfirm} disabled={isCancellingBooking}>Abbrechen</button>
               <button type="button" className="btn btn-danger" onClick={() => void submitPopupCancel()} disabled={isCancellingBooking}>
-                {isCancellingBooking ? 'Storniere…' : 'Stornieren'}
+                {isCancellingBooking ? 'Stornieren…' : 'Stornieren'}
               </button>
             </div>
           </section>
