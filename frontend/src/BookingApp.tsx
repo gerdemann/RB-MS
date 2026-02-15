@@ -523,7 +523,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           { key: 'today', label: 'Heute im Büro', items: bookingsToday, emptyText: 'Niemand im Büro an diesem Tag.' },
           { key: 'tomorrow', label: 'Morgen im Büro', items: bookingsTomorrow, emptyText: 'Morgen ist aktuell niemand eingeplant.' }
         ].map((section) => (
-          <section key={section.key} className="occupancy-section stack-sm">
+          <section key={section.key} className={`occupancy-section stack-sm ${section.key === 'tomorrow' ? 'occupancy-section-card' : ''}`}>
             <div className="inline-between">
               <h4>{section.label} ({section.items.length})</h4>
             </div>
