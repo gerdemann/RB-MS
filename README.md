@@ -82,11 +82,18 @@
 ### Entra (optional)
 - `ENTRA_LOGOUT_REDIRECT=https://rb-ms-1.onrender.com/#/login`
 
+### Dev/Test Auth Bypass (optional, niemals Produktion)
+- `AUTH_BYPASS=true` aktiviert im Backend den Header-Bypass **nur** wenn `NODE_ENV != production`
+- Mit Header `x-dev-user: admin` wird ein lokaler Admin-User (`dev@local`) gesetzt
+
 ### Frontend (required)
 - `VITE_API_BASE_URL=https://rb-ms.onrender.com`
 
 ### Frontend (optional)
 - `VITE_BREAKGLASS_PATH=/#/breakglass`
+- `VITE_AUTH_BYPASS=true` erlaubt in Preview-Builds den Dev-Header bei `?devAuth=1`
+
+**Hinweis:** Dev-Bypass wird nur mit `?devAuth=1` im URL-Query aktiv und sendet dann `x-dev-user: admin`.
 
 ---
 
