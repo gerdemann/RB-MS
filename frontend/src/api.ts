@@ -1,6 +1,31 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || window.location.origin;
 const REQUEST_TIMEOUT_MS = 6000;
 
+const DEV_AUTH_QUERY_PARAM = 'devAuth';
+const DEV_AUTH_QUERY_VALUE = '1';
+
+const shouldUseDevAuthBypass = (): boolean => {
+  if (typeof window === 'undefined') return false;
+
+  const bypassAllowedByBuild = import.meta.env.DEV || import.meta.env.VITE_AUTH_BYPASS === 'true';
+  if (!bypassAllowedByBuild) return false;
+
+  const query = new URLSearchParams(window.location.search);
+  return query.get(DEV_AUTH_QUERY_PARAM) === DEV_AUTH_QUERY_VALUE;
+};
+
+const createRequestHeaders = (): HeadersInit => {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  if (shouldUseDevAuthBypass()) {
+    headers['x-dev-user'] = 'admin';
+  }
+
+  return headers;
+};
+
 export type ApiErrorCode = 'BACKEND_UNREACHABLE' | 'UNAUTHORIZED' | 'SERVER_ERROR' | 'ORIGIN_BLOCKED' | 'UNKNOWN';
 export type ApiErrorKind = 'BACKEND_UNREACHABLE' | 'HTTP_ERROR';
 
@@ -97,9 +122,7 @@ async function sendRequest(path: string, method: HttpMethod, payload?: unknown, 
     signal,
     credentials: 'include',
     cache: 'no-store',
-    headers: {
-      'Content-Type': 'application/json'
-    },
+    headers: createRequestHeaders(),
     ...(typeof payload === 'undefined' ? {} : { body: JSON.stringify(payload) })
   });
 }
