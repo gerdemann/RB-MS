@@ -16,6 +16,8 @@ type OccupancyDesk = {
   id: string;
   name: string;
   kind?: string;
+  allowSeriesOverride?: boolean | null;
+  effectiveAllowSeries?: boolean;
   x: number;
   y: number;
   status: 'free' | 'booked';
@@ -526,6 +528,10 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
 
   const handleBookingSubmit = async (payload: BookingSubmitPayload) => {
+    if (payload.type === 'recurring' && popupDesk?.effectiveAllowSeries === false) {
+      setDialogErrorMessage('Für diese Ressource sind Serientermine nicht erlaubt.');
+      return;
+    }
     if (!deskPopup || !popupDesk || popupDeskState !== 'FREE') return;
 
     setDialogErrorMessage('');
@@ -877,6 +883,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                   isSubmitting={bookingDialogState === 'SUBMITTING'}
                   disabled={bookingDialogState === 'SUBMITTING'}
                   errorMessage={dialogErrorMessage}
+                  allowRecurring={popupDesk.effectiveAllowSeries !== false}
                 />
               </>
             ) : (

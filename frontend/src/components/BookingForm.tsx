@@ -38,7 +38,7 @@ const weekdayButtons = [
   { label: 'So', value: 0 }
 ];
 
-export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting, disabled, errorMessage }: {
+export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting, disabled, errorMessage, allowRecurring = true }: {
   values: BookingFormValues;
   onChange: (next: BookingFormValues) => void;
   onSubmit: (payload: BookingFormSubmitPayload) => Promise<void>;
@@ -46,6 +46,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
   isSubmitting: boolean;
   disabled: boolean;
   errorMessage?: string;
+  allowRecurring?: boolean;
 }) {
   const [localError, setLocalError] = useState('');
   const typeSelectRef = useRef<HTMLSelectElement | null>(null);
@@ -53,6 +54,12 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
   useEffect(() => {
     typeSelectRef.current?.focus();
   }, []);
+
+
+  useEffect(() => {
+    if (allowRecurring || values.type !== 'recurring') return;
+    onChange({ ...values, type: 'single' });
+  }, [allowRecurring, onChange, values]);
 
   const fieldErrors = useMemo(() => {
     const nextErrors: { date?: string; dateFrom?: string; dateTo?: string; weekdays?: string } = {};
@@ -122,14 +129,16 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
           value={values.type}
           disabled={disabled}
           onChange={(event) => {
-            const nextType = event.target.value === 'recurring' ? 'recurring' : 'single';
+            const nextType = allowRecurring && event.target.value === 'recurring' ? 'recurring' : 'single';
             onChange({ ...values, type: nextType });
           }}
         >
           <option value="single">Einzelbuchung ganzer Tag</option>
-          <option value="recurring">Serienbuchung</option>
+          {allowRecurring && <option value="recurring">Serienbuchung</option>}
         </select>
       </div>
+
+      {!allowRecurring && <p className="muted">Für diese Ressource sind Serientermine nicht erlaubt.</p>}
 
       {values.type === 'single' && (
         <div className="stack-xs">
