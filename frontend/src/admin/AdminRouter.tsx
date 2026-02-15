@@ -7,8 +7,9 @@ import { FloorplanCanvas } from '../FloorplanCanvas';
 import { useToast } from '../components/toast';
 import { RESOURCE_KIND_OPTIONS, resourceKindLabel, type ResourceKind } from '../resourceKinds';
 
-type Floorplan = { id: string; name: string; imageUrl: string; createdAt?: string; updatedAt?: string };
-type Desk = { id: string; floorplanId: string; name: string; kind?: ResourceKind; x: number; y: number; createdAt?: string; updatedAt?: string };
+type SeriesPolicy = 'DEFAULT' | 'ALLOW' | 'DISALLOW';
+type Floorplan = { id: string; name: string; imageUrl: string; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean; createdAt?: string; updatedAt?: string };
+type Desk = { id: string; floorplanId: string; name: string; kind?: ResourceKind; allowSeriesOverride?: boolean | null; effectiveAllowSeries?: boolean; x: number; y: number; createdAt?: string; updatedAt?: string };
 type Employee = { id: string; email: string; displayName: string; role: 'admin' | 'user'; isActive: boolean; photoUrl?: string | null; createdAt?: string; updatedAt?: string };
 type Booking = { id: string; deskId: string; userEmail: string; userDisplayName?: string; employeeId?: string; date: string; createdAt?: string; updatedAt?: string };
 type DbColumn = { name: string; type: string; required: boolean; id: boolean; hasDefaultValue: boolean };
@@ -21,6 +22,7 @@ type DeskFormState = {
   floorplanId: string;
   name: string;
   kind: ResourceKind;
+  seriesPolicy: SeriesPolicy;
   x: number | null;
   y: number | null;
 };
@@ -47,6 +49,17 @@ const isLikelyDateColumn = (columnName: string) => ['date', 'createdat', 'update
 const isIdColumn = (columnName: string) => ['id', 'deskid'].includes(columnName.toLowerCase());
 const dbTableLabel = (table: DbTable): string => (table.model === 'Desk' ? 'Ressourcen' : table.model);
 
+const toSeriesPolicy = (allowSeriesOverride?: boolean | null): SeriesPolicy => {
+  if (allowSeriesOverride === true) return 'ALLOW';
+  if (allowSeriesOverride === false) return 'DISALLOW';
+  return 'DEFAULT';
+};
+
+const fromSeriesPolicy = (seriesPolicy: SeriesPolicy): boolean | null => {
+  if (seriesPolicy === 'ALLOW') return true;
+  if (seriesPolicy === 'DISALLOW') return false;
+  return null;
+};
 const formatCellValue = (columnName: string, value: unknown) => {
   if (value === null || typeof value === 'undefined') return '—';
   if (isLikelyDateColumn(columnName) && typeof value === 'string') {
@@ -456,17 +469,19 @@ function FloorplansPage({ path, navigate, onLogout, currentUser }: RouteProps) {
 function FloorplanEditor({ floorplan, onClose, onSaved, onError }: { floorplan: Floorplan | null; onClose: () => void; onSaved: () => Promise<void>; onError: (message: string) => void }) {
   const [name, setName] = useState(floorplan?.name ?? '');
   const [imageUrl, setImageUrl] = useState(floorplan?.imageUrl ?? '');
+  const [defaultResourceKind, setDefaultResourceKind] = useState<ResourceKind>(floorplan?.defaultResourceKind ?? 'TISCH');
+  const [defaultAllowSeries, setDefaultAllowSeries] = useState<boolean>(floorplan?.defaultAllowSeries ?? true);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      if (floorplan) await patch(`/admin/floorplans/${floorplan.id}`, { name, imageUrl });
-      else await post('/admin/floorplans', { name, imageUrl });
+      if (floorplan) await patch(`/admin/floorplans/${floorplan.id}`, { name, imageUrl, defaultResourceKind, defaultAllowSeries });
+      else await post('/admin/floorplans', { name, imageUrl, defaultResourceKind, defaultAllowSeries });
       await onSaved();
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen');
     }
   };
-  return <div className="overlay"><section className="card dialog stack-sm"><h3>{floorplan ? 'Floorplan bearbeiten' : 'Floorplan anlegen'}</h3><form className="stack-sm" onSubmit={submit}><input required placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} /><input required placeholder="Asset URL" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} /><div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn">Speichern</button></div></form></section></div>;
+  return <div className="overlay"><section className="card dialog stack-sm"><h3>{floorplan ? 'Floorplan bearbeiten' : 'Floorplan anlegen'}</h3><form className="stack-sm" onSubmit={submit}><input required placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} /><input required placeholder="Asset URL" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} /><div className="stack-xs"><strong>Defaults</strong><label className="field"><span>Standard-Ressourcenart</span><select value={defaultResourceKind} onChange={(event) => setDefaultResourceKind(event.target.value as ResourceKind)}>{RESOURCE_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label className="field"><span>Serientermine standardmäßig erlauben</span><input type="checkbox" checked={defaultAllowSeries} onChange={(event) => setDefaultAllowSeries(event.target.checked)} /></label></div><div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn">Speichern</button></div></form></section></div>;
 }
 
 function PositionPickerDialog({ floorplan, x, y, onClose, onPick }: { floorplan: Floorplan | null; x: number | null; y: number | null; onClose: () => void; onPick: (x: number, y: number) => void }) {
@@ -485,7 +500,7 @@ function PositionPickerDialog({ floorplan, x, y, onClose, onPick }: { floorplan:
 }
 
 function DeskEditor({ desk, floorplans, defaultFloorplanId, initialPosition, lockFloorplan, onRequestPositionMode, onClose, onSaved, onError }: { desk: Desk | null; floorplans: Floorplan[]; defaultFloorplanId: string; initialPosition?: { x: number; y: number } | null; lockFloorplan?: boolean; onRequestPositionMode?: () => void; onClose: () => void; onSaved: () => Promise<void>; onError: (message: string) => void }) {
-  const [form, setForm] = useState<DeskFormState>({ floorplanId: desk?.floorplanId ?? defaultFloorplanId, name: desk?.name ?? '', kind: desk?.kind ?? 'TISCH', x: initialPosition?.x ?? desk?.x ?? null, y: initialPosition?.y ?? desk?.y ?? null });
+  const [form, setForm] = useState<DeskFormState>({ floorplanId: desk?.floorplanId ?? defaultFloorplanId, name: desk?.name ?? '', kind: desk?.kind ?? floorplans.find((item) => item.id === (desk?.floorplanId ?? defaultFloorplanId))?.defaultResourceKind ?? 'TISCH', seriesPolicy: toSeriesPolicy(desk?.allowSeriesOverride), x: initialPosition?.x ?? desk?.x ?? null, y: initialPosition?.y ?? desk?.y ?? null });
   const [showPicker, setShowPicker] = useState(false);
   const [inlineError, setInlineError] = useState('');
 
@@ -493,9 +508,19 @@ function DeskEditor({ desk, floorplans, defaultFloorplanId, initialPosition, loc
   const floorplan = floorplans.find((item) => item.id === form.floorplanId) ?? null;
 
   const onFloorplanChange = (nextFloorplanId: string) => {
-    setForm((current) => ({ ...current, floorplanId: nextFloorplanId, x: current.floorplanId === nextFloorplanId ? current.x : null, y: current.floorplanId === nextFloorplanId ? current.y : null }));
+    setForm((current) => ({ ...current, floorplanId: nextFloorplanId, kind: desk ? current.kind : (floorplans.find((item) => item.id === nextFloorplanId)?.defaultResourceKind ?? current.kind), x: current.floorplanId === nextFloorplanId ? current.x : null, y: current.floorplanId === nextFloorplanId ? current.y : null }));
     setInlineError('');
   };
+
+
+  useEffect(() => {
+    if (desk) return;
+    const selectedFloorplan = floorplans.find((item) => item.id === form.floorplanId);
+    if (!selectedFloorplan?.defaultResourceKind) return;
+    setForm((current) => current.kind === selectedFloorplan.defaultResourceKind
+      ? current
+      : { ...current, kind: selectedFloorplan.defaultResourceKind as ResourceKind });
+  }, [desk, floorplans, form.floorplanId]);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -505,9 +530,9 @@ function DeskEditor({ desk, floorplans, defaultFloorplanId, initialPosition, loc
     }
     try {
       if (desk) {
-        await patch(`/admin/desks/${desk.id}`, { name: form.name, kind: form.kind, x: form.x, y: form.y });
+        await patch(`/admin/desks/${desk.id}`, { name: form.name, kind: form.kind, allowSeriesOverride: fromSeriesPolicy(form.seriesPolicy), x: form.x, y: form.y });
       } else {
-        await post(`/admin/floorplans/${form.floorplanId}/desks`, { name: form.name, kind: form.kind, x: form.x, y: form.y });
+        await post(`/admin/floorplans/${form.floorplanId}/desks`, { name: form.name, kind: form.kind, allowSeriesOverride: fromSeriesPolicy(form.seriesPolicy), x: form.x, y: form.y });
       }
       await onSaved();
     } catch (err) {
@@ -517,7 +542,7 @@ function DeskEditor({ desk, floorplans, defaultFloorplanId, initialPosition, loc
 
   return (
     <>
-      <div className="overlay"><section className="card dialog stack-sm"><h3>{desk ? 'Ressource bearbeiten' : 'Ressource anlegen'}</h3><form className="stack-sm" onSubmit={submit}>{lockFloorplan ? <label className="field"><span>Floorplan</span><input value={floorplans.find((f) => f.id === form.floorplanId)?.name ?? '—'} disabled /></label> : <label className="field"><span>Floorplan</span><select required value={form.floorplanId} onChange={(e) => onFloorplanChange(e.target.value)}><option value="">Floorplan wählen</option>{floorplans.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>}<label className="field"><span>Art</span><select value={form.kind} onChange={(e) => setForm((current) => ({ ...current, kind: e.target.value as ResourceKind }))}>{RESOURCE_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label className="field"><span>Name</span><input required placeholder="z. B. H4" value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} /></label><div className="field"><span>Position</span><div className="inline-between"><Badge tone={form.x !== null && form.y !== null ? 'ok' : 'warn'}>{form.x !== null && form.y !== null ? `Position gesetzt (${Math.round(form.x * 100)}% / ${Math.round(form.y * 100)}%)` : 'Keine Position gesetzt'}</Badge><div className="admin-toolbar">{onRequestPositionMode && <button type="button" className="btn btn-outline" onClick={() => { onClose(); onRequestPositionMode(); }}>Position im Plan ändern</button>}<button type="button" className="btn btn-outline" disabled={!form.floorplanId} onClick={() => setShowPicker(true)}>{form.x !== null && form.y !== null ? 'Neu positionieren' : 'Position im Plan setzen'}</button></div></div>{!form.floorplanId && <p className="muted">Bitte Floorplan wählen.</p>}</div>{inlineError && <p className="error-banner">{inlineError}</p>}<div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn" disabled={!canSave}>Speichern</button></div></form></section></div>
+      <div className="overlay"><section className="card dialog stack-sm"><h3>{desk ? 'Ressource bearbeiten' : 'Ressource anlegen'}</h3><form className="stack-sm" onSubmit={submit}>{lockFloorplan ? <label className="field"><span>Floorplan</span><input value={floorplans.find((f) => f.id === form.floorplanId)?.name ?? '—'} disabled /></label> : <label className="field"><span>Floorplan</span><select required value={form.floorplanId} onChange={(e) => onFloorplanChange(e.target.value)}><option value="">Floorplan wählen</option>{floorplans.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>}<label className="field"><span>Art</span><select value={form.kind} onChange={(e) => setForm((current) => ({ ...current, kind: e.target.value as ResourceKind }))}>{RESOURCE_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label className="field"><span>Serientermine</span><select value={form.seriesPolicy} onChange={(e) => setForm((current) => ({ ...current, seriesPolicy: e.target.value as SeriesPolicy }))}><option value="DEFAULT">Floor-Default verwenden</option><option value="ALLOW">Erlauben</option><option value="DISALLOW">Nicht erlauben</option></select><p className="muted">Default = Einstellung aus Floorplan.</p></label><label className="field"><span>Name</span><input required placeholder="z. B. H4" value={form.name} onChange={(e) => setForm((current) => ({ ...current, name: e.target.value }))} /></label><div className="field"><span>Position</span><div className="inline-between"><Badge tone={form.x !== null && form.y !== null ? 'ok' : 'warn'}>{form.x !== null && form.y !== null ? `Position gesetzt (${Math.round(form.x * 100)}% / ${Math.round(form.y * 100)}%)` : 'Keine Position gesetzt'}</Badge><div className="admin-toolbar">{onRequestPositionMode && <button type="button" className="btn btn-outline" onClick={() => { onClose(); onRequestPositionMode(); }}>Position im Plan ändern</button>}<button type="button" className="btn btn-outline" disabled={!form.floorplanId} onClick={() => setShowPicker(true)}>{form.x !== null && form.y !== null ? 'Neu positionieren' : 'Position im Plan setzen'}</button></div></div>{!form.floorplanId && <p className="muted">Bitte Floorplan wählen.</p>}</div>{inlineError && <p className="error-banner">{inlineError}</p>}<div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn" disabled={!canSave}>Speichern</button></div></form></section></div>
       {showPicker && <PositionPickerDialog floorplan={floorplan} x={form.x} y={form.y} onClose={() => setShowPicker(false)} onPick={(x, y) => { setForm((current) => ({ ...current, x, y })); setShowPicker(false); setInlineError(''); }} />}
     </>
   );

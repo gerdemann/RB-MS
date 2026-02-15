@@ -803,8 +803,12 @@ const getActiveEmployeesByEmail = async (emails: string[]) => {
 
 const getDeskContext = async (deskId: string) => prisma.desk.findUnique({
   where: { id: deskId },
-  select: { id: true, name: true, floorplanId: true, kind: true }
+  select: { id: true, name: true, floorplanId: true, kind: true, allowSeriesOverride: true, floorplan: { select: { defaultAllowSeries: true } } }
 });
+
+const resolveEffectiveAllowSeries = (desk: { allowSeriesOverride: boolean | null; floorplan?: { defaultAllowSeries: boolean } | null }): boolean => (
+  desk.allowSeriesOverride ?? desk.floorplan?.defaultAllowSeries ?? true
+);
 
 
 app.get('/health', async (_req, res) => {
@@ -1634,10 +1638,21 @@ app.get('/floorplans/:id', async (req, res) => {
 app.get('/floorplans/:id/desks', async (req, res) => {
   const desks = await prisma.desk.findMany({
     where: { floorplanId: req.params.id },
+    include: { floorplan: { select: { defaultAllowSeries: true } } },
     orderBy: { createdAt: 'asc' }
   });
 
-  res.status(200).json(desks);
+  res.status(200).json(desks.map((desk) => ({
+    id: desk.id,
+    floorplanId: desk.floorplanId,
+    name: desk.name,
+    kind: desk.kind,
+    allowSeriesOverride: desk.allowSeriesOverride,
+    effectiveAllowSeries: resolveEffectiveAllowSeries(desk),
+    x: desk.x,
+    y: desk.y,
+    createdAt: desk.createdAt
+  })));
 });
 
 app.post('/bookings', async (req, res) => {
@@ -2218,6 +2233,7 @@ app.get('/occupancy', async (req, res) => {
 
   const desks = await prisma.desk.findMany({
     where: { floorplanId },
+    include: { floorplan: { select: { defaultAllowSeries: true } } },
     orderBy: { createdAt: 'asc' }
   });
 
@@ -2242,6 +2258,8 @@ app.get('/occupancy', async (req, res) => {
         kind: desk.kind,
         x: desk.x,
         y: desk.y,
+        allowSeriesOverride: desk.allowSeriesOverride,
+        effectiveAllowSeries: resolveEffectiveAllowSeries(desk),
         status: 'booked' as const,
         booking: {
           id: single.id,
@@ -2262,6 +2280,8 @@ app.get('/occupancy', async (req, res) => {
       kind: desk.kind,
       x: desk.x,
       y: desk.y,
+      allowSeriesOverride: desk.allowSeriesOverride,
+      effectiveAllowSeries: resolveEffectiveAllowSeries(desk),
       status: 'free' as const,
       booking: null
     };
@@ -2331,9 +2351,14 @@ app.post('/recurring-bookings', async (req, res) => {
     return;
   }
 
-  const desk = await prisma.desk.findUnique({ where: { id: deskId } });
+  const desk = await prisma.desk.findUnique({ where: { id: deskId }, include: { floorplan: { select: { defaultAllowSeries: true } } } });
   if (!desk) {
     res.status(404).json({ error: 'not_found', message: 'Desk not found' });
+    return;
+  }
+
+  if (!resolveEffectiveAllowSeries(desk)) {
+    res.status(409).json({ error: 'conflict', message: 'Recurring bookings are not allowed for this resource' });
     return;
   }
 
@@ -2443,9 +2468,14 @@ app.post('/recurring-bookings/bulk', async (req, res) => {
     return;
   }
 
-  const desk = await prisma.desk.findUnique({ where: { id: deskId }, select: { id: true, kind: true } });
+  const desk = await prisma.desk.findUnique({ where: { id: deskId }, select: { id: true, kind: true, allowSeriesOverride: true, floorplan: { select: { defaultAllowSeries: true } } } });
   if (!desk) {
     res.status(404).json({ error: 'not_found', message: 'Desk not found' });
+    return;
+  }
+
+  if (!resolveEffectiveAllowSeries(desk)) {
+    res.status(409).json({ error: 'conflict', message: 'Recurring bookings are not allowed for this resource' });
     return;
   }
 
@@ -2596,14 +2626,32 @@ app.get('/recurring-bookings', async (req, res) => {
 });
 
 app.post('/admin/floorplans', requireAdmin, async (req, res) => {
-  const { name, imageUrl } = req.body as { name?: string; imageUrl?: string };
+  const { name, imageUrl, defaultResourceKind, defaultAllowSeries } = req.body as { name?: string; imageUrl?: string; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean };
 
   if (!name || !imageUrl) {
     res.status(400).json({ error: 'validation', message: 'name and imageUrl are required' });
     return;
   }
 
-  const floorplan = await prisma.floorplan.create({ data: { name, imageUrl } });
+  const parsedDefaultKind = typeof defaultResourceKind === 'undefined' ? 'TISCH' : parseResourceKind(defaultResourceKind);
+  if (!parsedDefaultKind) {
+    res.status(400).json({ error: 'validation', message: 'defaultResourceKind must be one of TISCH, PARKPLATZ, RAUM, SONSTIGES' });
+    return;
+  }
+
+  if (typeof defaultAllowSeries !== 'undefined' && typeof defaultAllowSeries !== 'boolean') {
+    res.status(400).json({ error: 'validation', message: 'defaultAllowSeries must be a boolean' });
+    return;
+  }
+
+  const floorplan = await prisma.floorplan.create({
+    data: {
+      name,
+      imageUrl,
+      defaultResourceKind: parsedDefaultKind,
+      ...(typeof defaultAllowSeries === 'boolean' ? { defaultAllowSeries } : {})
+    }
+  });
   res.status(201).json(floorplan);
 });
 
@@ -2614,12 +2662,23 @@ app.patch('/admin/floorplans/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, imageUrl } = req.body as { name?: string; imageUrl?: string };
-  if (typeof name === 'undefined' && typeof imageUrl === 'undefined') {
-    res.status(400).json({ error: 'validation', message: 'name or imageUrl must be provided' });
+  const { name, imageUrl, defaultResourceKind, defaultAllowSeries } = req.body as { name?: string; imageUrl?: string; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean };
+  if (typeof name === 'undefined' && typeof imageUrl === 'undefined' && typeof defaultResourceKind === 'undefined' && typeof defaultAllowSeries === 'undefined') {
+    res.status(400).json({ error: 'validation', message: 'name, imageUrl, defaultResourceKind or defaultAllowSeries must be provided' });
     return;
   }
 
+
+  const parsedDefaultKind = typeof defaultResourceKind === 'undefined' ? null : parseResourceKind(defaultResourceKind);
+  if (typeof defaultResourceKind !== 'undefined' && !parsedDefaultKind) {
+    res.status(400).json({ error: 'validation', message: 'defaultResourceKind must be one of TISCH, PARKPLATZ, RAUM, SONSTIGES' });
+    return;
+  }
+
+  if (typeof defaultAllowSeries !== 'undefined' && typeof defaultAllowSeries !== 'boolean') {
+    res.status(400).json({ error: 'validation', message: 'defaultAllowSeries must be a boolean' });
+    return;
+  }
   if (typeof name === 'string' && name.trim().length === 0) {
     res.status(400).json({ error: 'validation', message: 'name must not be empty' });
     return;
@@ -2630,7 +2689,9 @@ app.patch('/admin/floorplans/:id', requireAdmin, async (req, res) => {
       where: { id },
       data: {
         ...(typeof name === 'string' ? { name: name.trim() } : {}),
-        ...(typeof imageUrl === 'string' ? { imageUrl } : {})
+        ...(typeof imageUrl === 'string' ? { imageUrl } : {}),
+        ...(parsedDefaultKind ? { defaultResourceKind: parsedDefaultKind } : {}),
+        ...(typeof defaultAllowSeries === 'boolean' ? { defaultAllowSeries } : {})
       }
     });
     res.status(200).json(updatedFloorplan);
@@ -2670,26 +2731,40 @@ app.post('/admin/floorplans/:id/desks', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, x, y, kind } = req.body as { name?: string; x?: number; y?: number; kind?: ResourceKind };
-  const parsedKind = typeof kind === 'undefined' ? 'TISCH' : parseResourceKind(kind);
+  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number; y?: number; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
+  const parsedKind = typeof kind === 'undefined' ? null : parseResourceKind(kind);
 
   if (!name || typeof x !== 'number' || typeof y !== 'number') {
     res.status(400).json({ error: 'validation', message: 'name, x and y are required' });
     return;
   }
 
-  if (!parsedKind) {
+  if (typeof kind !== 'undefined' && !parsedKind) {
     res.status(400).json({ error: 'validation', message: 'kind must be one of TISCH, PARKPLATZ, RAUM, SONSTIGES' });
     return;
   }
 
-  const floorplan = await prisma.floorplan.findUnique({ where: { id } });
+  if (typeof allowSeriesOverride !== 'undefined' && allowSeriesOverride !== null && typeof allowSeriesOverride !== 'boolean') {
+    res.status(400).json({ error: 'validation', message: 'allowSeriesOverride must be boolean or null' });
+    return;
+  }
+
+  const floorplan = await prisma.floorplan.findUnique({ where: { id }, select: { id: true, defaultResourceKind: true } });
   if (!floorplan) {
     res.status(404).json({ error: 'not_found', message: 'Floorplan not found' });
     return;
   }
 
-  const desk = await prisma.desk.create({ data: { floorplanId: id, name: name.slice(0, 60), x, y, kind: parsedKind } });
+  const desk = await prisma.desk.create({
+    data: {
+      floorplanId: id,
+      name: name.slice(0, 60),
+      x,
+      y,
+      kind: parsedKind ?? floorplan.defaultResourceKind,
+      ...(typeof allowSeriesOverride !== 'undefined' ? { allowSeriesOverride } : {})
+    }
+  });
   res.status(201).json(desk);
 });
 
@@ -2730,15 +2805,17 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, x, y, kind } = req.body as { name?: string; x?: number; y?: number; kind?: ResourceKind };
+  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number; y?: number; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
   const hasName = typeof name !== 'undefined';
   const hasX = typeof x !== 'undefined';
   const hasY = typeof y !== 'undefined';
   const hasKind = typeof kind !== 'undefined';
   const parsedKind = hasKind ? parseResourceKind(kind) : null;
 
-  if (!hasName && !hasX && !hasY && !hasKind) {
-    res.status(400).json({ error: 'validation', message: 'name, x, y or kind must be provided' });
+  const hasAllowSeriesOverride = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'allowSeriesOverride');
+
+  if (!hasName && !hasX && !hasY && !hasKind && !hasAllowSeriesOverride) {
+    res.status(400).json({ error: 'validation', message: 'name, x, y, kind or allowSeriesOverride must be provided' });
     return;
   }
 
@@ -2757,16 +2834,23 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     return;
   }
 
+
+  if (hasAllowSeriesOverride && allowSeriesOverride !== null && typeof allowSeriesOverride !== 'boolean') {
+    res.status(400).json({ error: 'validation', message: 'allowSeriesOverride must be boolean or null' });
+    return;
+  }
+
   if (hasKind && !parsedKind) {
     res.status(400).json({ error: 'validation', message: 'kind must be one of TISCH, PARKPLATZ, RAUM, SONSTIGES' });
     return;
   }
 
-  const data: { name?: string; x?: number; y?: number; kind?: ResourceKind } = {};
+  const data: { name?: string; x?: number; y?: number; kind?: ResourceKind; allowSeriesOverride?: boolean | null } = {};
   if (hasName) data.name = name.trim().slice(0, 60);
   if (hasX) data.x = x;
   if (hasY) data.y = y;
   if (hasKind && parsedKind) data.kind = parsedKind;
+  if (hasAllowSeriesOverride) data.allowSeriesOverride = allowSeriesOverride ?? null;
 
   try {
     const updatedDesk = await prisma.desk.update({ where: { id }, data });

@@ -36,11 +36,13 @@ model Employee {
 }
 
 model Floorplan {
-  id        String   @id @default(cuid())
-  name      String
-  imageUrl  String
-  createdAt DateTime @default(now())
-  desks     Desk[]
+  id                  String       @id @default(cuid())
+  name                String
+  imageUrl            String
+  defaultResourceKind ResourceKind @default(TISCH)
+  defaultAllowSeries  Boolean      @default(true)
+  createdAt           DateTime     @default(now())
+  desks               Desk[]
 }
 
 model Desk {
@@ -48,6 +50,7 @@ model Desk {
   floorplanId       String
   name              String
   kind              ResourceKind       @default(TISCH)
+  allowSeriesOverride Boolean?
   x                 Float
   y                 Float
   createdAt         DateTime           @default(now())
