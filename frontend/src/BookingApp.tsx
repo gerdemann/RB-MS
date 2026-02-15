@@ -175,6 +175,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const filteredDesks = useMemo(() => (onlyFree ? desks.filter((desk) => desk.status === 'free') : desks).map((desk) => ({ ...desk, isHighlighted: desk.id === highlightedDeskId })), [desks, onlyFree, highlightedDeskId]);
   const bookingsToday = useMemo<OccupantForDay[]>(() => mapBookingsForDay(desks), [desks]);
   const bookingsTomorrow = useMemo<OccupantForDay[]>(() => mapBookingsForDay(desksTomorrow), [desksTomorrow]);
+  const tomorrowDate = useMemo(() => getNextDate(selectedDate), [selectedDate]);
   const popupDesk = useMemo(() => (deskPopup ? desks.find((desk) => desk.id === deskPopup.deskId) ?? null : null), [desks, deskPopup]);
   const popupDeskState = popupDesk ? (!popupDesk.booking ? 'FREE' : popupDesk.isCurrentUsersDesk ? 'MINE' : 'TAKEN') : null;
   const deskPopupPosition = useMemo(() => {
@@ -509,61 +510,55 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   );
 
   const detailPanel = (
-    <section className="card stack-sm details-panel">
-      <div className="summary-row">
-        <div>
-          <p className="muted">{new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
-          <h3>{selectedFloorplan?.name ?? 'Kein Floorplan'}</h3>
-        </div>
-        <span className="badge">Im Büro heute: {bookingsToday.length}</span>
-      </div>
-
-      <div className="occupancy-sections">
-        {[
-          { key: 'today', label: 'Heute im Büro', items: bookingsToday, emptyText: 'Niemand im Büro an diesem Tag.' },
-          { key: 'tomorrow', label: 'Morgen im Büro', items: bookingsTomorrow, emptyText: 'Morgen ist aktuell niemand eingeplant.' }
-        ].map((section) => (
-          <section key={section.key} className={`occupancy-section stack-sm ${section.key === 'tomorrow' ? 'occupancy-section-card' : ''}`}>
-            <div className="inline-between">
-              <h4>{section.label} ({section.items.length})</h4>
+    <div className="stack">
+      {[
+        { key: 'today', title: 'Heute im Büro', date: selectedDate, items: bookingsToday, emptyText: 'Niemand im Büro an diesem Tag.' },
+        { key: 'tomorrow', title: 'Morgen im Büro', date: tomorrowDate, items: bookingsTomorrow, emptyText: 'Morgen ist aktuell niemand eingeplant.' }
+      ].map((section) => (
+        <section key={section.key} className="card stack-sm details-panel">
+          <div className="summary-row">
+            <div>
+              <h3>{section.title} ({section.items.length})</h3>
+              <p className="muted">Münster · {new Date(`${section.date}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
             </div>
-            {section.items.length === 0 ? (
-              <div className="empty-state compact-empty-state">
-                <p>{section.emptyText}</p>
-              </div>
-            ) : (
-              <div className="occupancy-list" role="list" aria-label={section.label}>
-                {section.items.map((occupant) => (
-                  <div
-                    key={`${section.key}-${occupant.userId}-${occupant.deskId}`}
-                    ref={section.key === 'today' ? (node) => { occupantRowRefs.current[occupant.deskId] = node; } : undefined}
-                    role="listitem"
-                    className={`occupant-compact-card ${(hoveredDeskId === occupant.deskId || selectedDeskId === occupant.deskId) ? 'is-active' : ''} ${highlightedDeskId === occupant.deskId ? 'is-highlighted' : ''}`}
-                    onMouseEnter={() => {
-                      setHoveredDeskId(occupant.deskId);
-                      setHighlightedDeskId(occupant.deskId);
-                    }}
-                    onMouseLeave={() => {
-                      setHoveredDeskId('');
-                      setHighlightedDeskId('');
-                    }}
-                  >
-                    <div className="occupant-card-main">
-                      <Avatar displayName={occupant.name} email={occupant.email} photoUrl={occupant.photoUrl} size={26} />
-                      <div className="occupant-card-text">
-                        <strong>{occupant.name}</strong>
-                        <p className="muted">{occupant.email}</p>
-                      </div>
+          </div>
+
+          {section.items.length === 0 ? (
+            <div className="empty-state compact-empty-state">
+              <p>{section.emptyText}</p>
+            </div>
+          ) : (
+            <div className="occupancy-list" role="list" aria-label={section.title}>
+              {section.items.map((occupant) => (
+                <div
+                  key={`${section.key}-${occupant.userId}-${occupant.deskId}`}
+                  ref={section.key === 'today' ? (node) => { occupantRowRefs.current[occupant.deskId] = node; } : undefined}
+                  role="listitem"
+                  className={`occupant-compact-card ${(hoveredDeskId === occupant.deskId || selectedDeskId === occupant.deskId) ? 'is-active' : ''} ${highlightedDeskId === occupant.deskId ? 'is-highlighted' : ''}`}
+                  onMouseEnter={() => {
+                    setHoveredDeskId(occupant.deskId);
+                    setHighlightedDeskId(occupant.deskId);
+                  }}
+                  onMouseLeave={() => {
+                    setHoveredDeskId('');
+                    setHighlightedDeskId('');
+                  }}
+                >
+                  <div className="occupant-card-main">
+                    <Avatar displayName={occupant.name} email={occupant.email} photoUrl={occupant.photoUrl} size={26} />
+                    <div className="occupant-card-text">
+                      <strong>{occupant.name}</strong>
+                      <p className="muted">{occupant.email}</p>
                     </div>
-                    <span className="muted occupant-desk">Tisch: {occupant.deskLabel}</span>
                   </div>
-                ))}
-              </div>
-            )}
-          </section>
-        ))}
-      </div>
-    </section>
+                  <span className="muted occupant-desk">Tisch: {occupant.deskLabel}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      ))}
+    </div>
   );
 
   if (backendDown) {
