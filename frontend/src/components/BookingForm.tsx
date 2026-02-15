@@ -57,6 +57,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
   roomSchedule?: {
     bookings: RoomScheduleItem[];
     freeSlots: RoomFreeSlot[];
+    isFullyBooked?: boolean;
     conflictMessage?: string;
     onSelectFreeSlot: (startTime: string, endTime: string) => void;
   };
@@ -165,6 +166,8 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
                 ) : (
                   <p className="room-free-hint">Heute frei</p>
                 )}
+
+                <strong className="room-schedule-title">Freie Zeitfenster</strong>
                 {roomSchedule && roomSchedule.freeSlots.length > 0 && (
                   <div className="room-free-slots" role="group" aria-label="Freie Zeitfenster">
                     {roomSchedule.freeSlots.map((slot) => (
@@ -172,6 +175,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
                     ))}
                   </div>
                 )}
+                {roomSchedule?.isFullyBooked && <p className="room-fully-booked-hint">Heute vollständig belegt</p>}
               </section>
               <div className="split">
                 <div className="stack-xs">
@@ -185,7 +189,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
                   {fieldErrors.endTime && <p className="field-error" role="alert">{fieldErrors.endTime}</p>}
                 </div>
               </div>
-              {roomSchedule?.conflictMessage && <p className="field-error" role="alert">{roomSchedule.conflictMessage}</p>}
+              {roomSchedule?.conflictMessage && <p className="field-error room-conflict-hint" role="alert">{roomSchedule.conflictMessage}</p>}
             </>
           ) : (
             <div className="stack-xs">
