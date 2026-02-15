@@ -112,6 +112,7 @@ tr{cursor:pointer}.row-selected{background:hsl(var(--muted))}
 
 .occupancy-sections{display:grid;gap:12px}
 .occupancy-section h4{margin:0;font-size:14px}
+.occupancy-section-card{background:hsl(var(--card));border:1px solid hsl(var(--border));border-radius:12px;padding:12px}
 .occupancy-list{display:grid;gap:6px;max-height:220px;overflow:auto;padding-right:2px}
 .occupant-compact-card{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:46px;padding:8px 10px;border-radius:10px;background:hsl(var(--muted)/.45);border:1px solid hsl(var(--border));transition:background .15s ease,border-color .15s ease}
 .occupant-compact-card:hover,.occupant-compact-card.is-active{background:hsl(var(--muted)/.85)}
