@@ -2,7 +2,7 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from '
 
 type BookingType = 'single' | 'recurring';
 type BookingSlot = 'FULL_DAY' | 'MORNING' | 'AFTERNOON';
-type RoomScheduleItem = { id: string; label: string; person: string };
+type RoomScheduleItem = { id: string; label: string; person: string; isCurrentUser?: boolean; canCancel?: boolean };
 type RoomFreeSlot = { label: string; startTime: string; endTime: string };
 
 export type BookingFormValues = {
@@ -60,6 +60,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
     isFullyBooked?: boolean;
     conflictMessage?: string;
     onSelectFreeSlot: (startTime: string, endTime: string) => void;
+    onBookingClick?: (bookingId: string) => void;
   };
 }) {
   const [localError, setLocalError] = useState('');
@@ -157,10 +158,21 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
                 {roomSchedule && roomSchedule.bookings.length > 0 ? (
                   <div className="room-bookings-list" role="list" aria-label="Raumbelegung heute">
                     {roomSchedule.bookings.map((booking) => (
-                      <div key={booking.id} className="room-booking-row" role="listitem">
+                      <button
+                        key={booking.id}
+                        type="button"
+                        className={`room-booking-row ${booking.canCancel ? 'is-clickable' : ''}`}
+                        role="listitem"
+                        onClick={() => roomSchedule.onBookingClick?.(booking.id)}
+                        disabled={!booking.canCancel || disabled || isSubmitting}
+                        title={booking.canCancel ? 'Eigene Buchung stornieren' : 'Buchungsdetails'}
+                      >
                         <span>{booking.label}</span>
-                        <span>{booking.person}</span>
-                      </div>
+                        <span>
+                          {booking.person}
+                          {booking.isCurrentUser && <em className="room-booking-badge">Du</em>}
+                        </span>
+                      </button>
                     ))}
                   </div>
                 ) : (
