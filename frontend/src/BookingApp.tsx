@@ -519,6 +519,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     } catch (error) {
       if (error instanceof ApiError && error.code === 'BACKEND_UNREACHABLE') {
         setBackendDown(true);
+        setBookingDialogState('BOOKING_OPEN');
+        setDialogErrorMessage('Backend nicht erreichbar. Bitte erneut versuchen.');
         return;
       }
 
@@ -560,6 +562,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     } catch (error) {
       if (error instanceof ApiError && error.code === 'BACKEND_UNREACHABLE') {
         setBackendDown(true);
+        setIsRebooking(false);
+        setRebookErrorMessage('Umbuchen fehlgeschlagen. Bitte erneut versuchen.');
         return;
       }
 
