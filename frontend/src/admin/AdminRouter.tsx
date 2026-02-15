@@ -953,11 +953,16 @@ function EmployeeEditor({ employee, onClose, onSaved, onError }: { employee: Emp
   return <div className="overlay"><section className="card dialog stack-sm"><h3>{employee ? 'Mitarbeiter bearbeiten' : 'Mitarbeiter anlegen'}</h3><form className="stack-sm" onSubmit={submit}><input required value={displayName} placeholder="Name" onChange={(e) => setDisplayName(e.target.value)} />{!employee && <input required type="email" value={email} placeholder="E-Mail" onChange={(e) => setEmail(e.target.value)} />}<label className="field"><span>Rolle</span><select value={role} onChange={(e) => setRole(e.target.value as 'admin' | 'user')}><option value="user">User</option><option value="admin">Admin</option></select></label>{employee && <label className="toggle"><input type="checkbox" checked={isActive} onChange={(e) => setIsActive(e.target.checked)} />Aktiv</label>}<div className="inline-end"><button className="btn btn-outline" type="button" onClick={onClose}>Abbrechen</button><button className="btn">Speichern</button></div></form></section></div>;
 }
 
-export function AdminRouter({ path, navigate, onRoleStateChanged, onLogout }: RouteProps) {
-  const [adminSession, setAdminSession] = useState<AdminSession | null>(null);
+export function AdminRouter({ path, navigate, onRoleStateChanged, onLogout, currentUser }: RouteProps) {
+  const [adminSession, setAdminSession] = useState<AdminSession | null>(currentUser ?? null);
   const route = basePath(path);
 
   useEffect(() => {
+    setAdminSession(currentUser ?? null);
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (currentUser) return;
     void (async () => {
       try {
         const session = await get<{ user: AdminSession }>('/auth/me');
@@ -966,7 +971,7 @@ export function AdminRouter({ path, navigate, onRoleStateChanged, onLogout }: Ro
         setAdminSession(null);
       }
     })();
-  }, []);
+  }, [currentUser]);
 
   if (route === '/admin') return <DashboardPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentUser={adminSession} />;
   if (route === '/admin/floorplans') return <FloorplansPage path={path} navigate={navigate} onRoleStateChanged={onRoleStateChanged} onLogout={onLogout} currentUser={adminSession} />;
