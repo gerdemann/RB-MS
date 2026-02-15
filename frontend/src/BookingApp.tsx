@@ -206,17 +206,6 @@ const toFreeIntervals = (occupied: TimeInterval[], dayStart = 8 * 60, dayEnd = 1
   if (cursor < dayEnd) free.push({ start: cursor, end: dayEnd });
   return free;
 };
-
-const roundToNextHalfHour = (value: Date): number => {
-  const rounded = new Date(value);
-  rounded.setSeconds(0, 0);
-  const minutes = rounded.getMinutes();
-  if (minutes % 30 !== 0) {
-    rounded.setMinutes(minutes + (30 - (minutes % 30)));
-  }
-  return rounded.getHours() * 60 + rounded.getMinutes();
-};
-
 const isUserBookingConflictError = (error: unknown): error is ApiError => {
   if (!(error instanceof ApiError) || error.status !== 409) return false;
   if (!error.details || typeof error.details !== 'object') return false;
@@ -470,7 +459,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         id: booking.id ?? `${booking.userEmail}-${booking.startTime}-${booking.endTime}`,
         start,
         end,
-        label: `${formatMinutesAsTime(start)}–${formatMinutesAsTime(end)}`,
+        label: `${formatMinutesAsTime(start)} – ${formatMinutesAsTime(end)}`,
         person: booking.userDisplayName ?? booking.userEmail,
       };
     })
@@ -478,11 +467,10 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     .sort((a, b) => a.start - b.start), [popupDeskBookings]);
   const popupRoomFreeSlotChips = useMemo(() => popupRoomFreeIntervals
     .filter((interval) => interval.end - interval.start >= 30)
-    .slice(0, 4)
     .map((interval) => ({
       startTime: formatMinutesAsTime(interval.start),
       endTime: formatMinutesAsTime(interval.end),
-      label: `${formatMinutesAsTime(interval.start)}–${formatMinutesAsTime(interval.end)}`
+      label: `${formatMinutesAsTime(interval.start)} – ${formatMinutesAsTime(interval.end)}`
     })), [popupRoomFreeIntervals]);
   const roomBookingConflict = useMemo(() => {
     if (!popupDesk || !isRoomResource(popupDesk)) return '';
@@ -491,7 +479,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     if (start === null || end === null || end <= start) return '';
     const conflict = popupRoomOccupiedIntervals.find((interval) => start < interval.end && end > interval.start);
     if (!conflict) return '';
-    return `Zeitraum kollidiert mit ${formatMinutesAsTime(conflict.start)}–${formatMinutesAsTime(conflict.end)}`;
+    return `Kollidiert mit ${formatMinutesAsTime(conflict.start)} – ${formatMinutesAsTime(conflict.end)}`;
   }, [popupDesk, bookingFormValues.startTime, bookingFormValues.endTime, popupRoomOccupiedIntervals]);
   const popupDeskState = popupDesk ? (!canBookDesk(popupDesk) ? (popupDesk.isCurrentUsersDesk ? 'MINE' : 'TAKEN') : 'FREE') : null;
   const cancelConfirmDesk = useMemo(() => (cancelConfirmContext ? desks.find((desk) => desk.id === cancelConfirmContext.deskId) ?? null : null), [desks, cancelConfirmContext]);
@@ -663,24 +651,17 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           return [{ start, end }];
         }));
         const freeIntervals = toFreeIntervals(occupiedIntervals);
-        const now = new Date();
-        const selectedIsToday = selectedDate === today;
-        const baseStart = selectedIsToday ? Math.max(8 * 60, roundToNextHalfHour(now)) : 9 * 60;
-        const fallbackEnd = Math.min(18 * 60, baseStart + 60);
-        let startMinutes = Math.min(baseStart, 18 * 60 - 30);
-        let endMinutes = fallbackEnd;
+        const firstFreeSlot = freeIntervals.find((interval) => interval.end > interval.start);
 
-        const firstMatchingFree = freeIntervals.find((interval) => interval.end - Math.max(interval.start, baseStart) >= 30);
-        if (firstMatchingFree) {
-          startMinutes = Math.max(firstMatchingFree.start, baseStart);
-          endMinutes = Math.min(firstMatchingFree.end, startMinutes + 60);
-          if (endMinutes <= startMinutes) {
-            endMinutes = Math.min(firstMatchingFree.end, startMinutes + 30);
-          }
+        if (firstFreeSlot) {
+          const startMinutes = firstFreeSlot.start;
+          const endMinutes = Math.min(firstFreeSlot.start + 60, firstFreeSlot.end);
+          defaults.startTime = formatMinutesAsTime(startMinutes);
+          defaults.endTime = formatMinutesAsTime(endMinutes);
+        } else {
+          defaults.startTime = '';
+          defaults.endTime = '';
         }
-
-        defaults.startTime = formatMinutesAsTime(startMinutes);
-        defaults.endTime = formatMinutesAsTime(Math.max(endMinutes, startMinutes + 30));
       }
       setBookingFormValues(defaults);
       setBookingDialogState('BOOKING_OPEN');
@@ -1122,7 +1103,6 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                 </div>
                 <button type="button" className="btn btn-ghost desk-popup-close" aria-label="Popover schließen" onClick={closeBookingFlow}>✕</button>
               </div>
-              <hr className="separator" />
               <BookingForm
                 values={bookingFormValues}
                 onChange={setBookingFormValues}
@@ -1137,6 +1117,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                   ? {
                     bookings: popupRoomBookingsList,
                     freeSlots: popupRoomFreeSlotChips,
+                    isFullyBooked: popupRoomFreeSlotChips.length === 0,
                     conflictMessage: roomBookingConflict,
                     onSelectFreeSlot: (startTime, endTime) => {
                       setBookingFormValues((current) => ({ ...current, startTime, endTime }));
