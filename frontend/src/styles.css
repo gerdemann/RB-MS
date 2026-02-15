@@ -182,8 +182,8 @@ tr{cursor:pointer}.row-selected{background:hsl(var(--muted))}
 .toast-message-wrap{display:flex;align-items:flex-start;gap:8px;min-width:0}
 .toast-icon{font-size:12px;line-height:1.5;font-weight:700;opacity:.75;margin-top:1px}
 .toast-message{margin:0;font-size:13px;line-height:1.35;font-weight:500;word-break:break-word}
-.toast-success{background:rgba(34,197,94,.12);color:#166534}
-.toast-error{background:rgba(239,68,68,.12);color:#991b1b}
+.toast-success{background:rgba(34,197,94,.2);color:#166534}
+.toast-error{background:rgba(239,68,68,.2);color:#991b1b}
 .toast-close{border:0;background:transparent;color:inherit;cursor:pointer;padding:0 2px;font-size:13px;line-height:1;opacity:.72;transition:opacity .15s ease}
 .toast-close:hover{opacity:1}
 @keyframes toast-in{from{opacity:0;transform:translateY(-6px)}to{opacity:1;transform:translateY(0)}}
