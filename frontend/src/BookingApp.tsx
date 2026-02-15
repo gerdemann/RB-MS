@@ -1,7 +1,8 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { API_BASE, ApiError, checkBackendHealth, del, get, markBackendAvailable, post, put, resolveApiUrl } from './api';
 import { Avatar } from './components/Avatar';
+import { BookingForm } from './components/BookingForm';
 import { UserMenu } from './components/UserMenu';
 import { FloorplanCanvas } from './FloorplanCanvas';
 import type { AuthUser } from './auth/AuthProvider';
@@ -13,7 +14,7 @@ type OccupancyDesk = {
   x: number;
   y: number;
   status: 'free' | 'booked';
-  booking: { id?: string; employeeId?: string; userEmail: string; userDisplayName?: string; userPhotoUrl?: string } | null;
+  booking: { id?: string; employeeId?: string; userEmail: string; userDisplayName?: string; userPhotoUrl?: string; type?: 'single' | 'recurring' } | null;
   isCurrentUsersDesk?: boolean;
   isHighlighted?: boolean;
 };
@@ -127,8 +128,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const deskPopupPosition = useMemo(() => {
     if (!deskPopup) return null;
     const viewportPadding = 12;
-    const popupWidth = 280;
-    const popupHeight = 140;
+    const popupWidth = 460;
+    const popupHeight = 500;
     const preferRight = deskPopup.anchorRect.right + 10;
     const preferLeft = deskPopup.anchorRect.left - popupWidth - 10;
     const canUseRight = preferRight + popupWidth <= window.innerWidth - viewportPadding;
@@ -319,22 +320,32 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     }
   };
 
-  const submitPopupAction = async (event: FormEvent) => {
-    event.preventDefault();
+  const submitPopupBooking = async (payload: { mode: 'single' | 'recurring'; validFrom: string; validTo: string; weekdays: number[] }) => {
     if (!popupDesk || !popupDeskState) return;
     try {
       if (!selectedEmployeeEmail) {
         throw new Error('Bitte Mitarbeiter auswählen.');
       }
 
-      if (popupDeskState === 'FREE') {
+      if (popupDeskState !== 'FREE') {
+        return;
+      }
+
+      if (payload.mode === 'single') {
         const result = await createSingleBooking(popupDesk.id);
         if (result !== 'created') {
           setErrorMessage('');
           return;
         }
       } else {
-        await cancelOwnBooking(popupDesk.id);
+        await post('/recurring-bookings/bulk', {
+          deskId: popupDesk.id,
+          userEmail: selectedEmployeeEmail,
+          weekdays: payload.weekdays,
+          validFrom: payload.validFrom,
+          validTo: payload.validTo
+        });
+        setToastMessage('Serienbuchung erstellt.');
       }
 
       setErrorMessage('');
@@ -355,6 +366,23 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       }
 
       setErrorMessage(error instanceof Error ? error.message : 'Buchung fehlgeschlagen.');
+    }
+  };
+
+  const submitPopupCancel = async () => {
+    if (!popupDesk || !popupDeskState || popupDeskState !== 'MINE') return;
+    if (popupDesk.booking?.type === 'recurring') {
+      setErrorMessage('Serienbuchungen können aktuell nur im Admin-Modus storniert werden.');
+      return;
+    }
+
+    try {
+      await cancelOwnBooking(popupDesk.id);
+      setErrorMessage('');
+      setDeskPopup(null);
+      await refreshData();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Stornierung fehlgeschlagen.');
     }
   };
 
@@ -547,12 +575,39 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         <>
           <div className="desk-popup-backdrop" onClick={() => setDeskPopup(null)} />
           <section className="card desk-popup" style={{ left: deskPopupPosition.left, top: deskPopupPosition.top }} role="dialog" aria-modal="true">
-            <h3>Tisch: {popupDesk.name}</h3>
-            <p className="muted">{new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
-            <form onSubmit={submitPopupAction} className="inline-end">
-              <button type="button" className="btn btn-outline" onClick={() => setDeskPopup(null)}>Schließen</button>
-              {popupDeskState === 'FREE' ? <button className="btn" type="submit">Buchung erstellen</button> : <button className="btn btn-danger" type="submit">Buchung stornieren</button>}
-            </form>
+            {popupDeskState === 'FREE' ? (
+              <>
+                <h3>Tisch: {popupDesk.name} buchen</h3>
+                <BookingForm
+                  selectedDate={selectedDate}
+                  onCancel={() => setDeskPopup(null)}
+                  onSubmit={async (payload) => {
+                    await submitPopupBooking(payload);
+                  }}
+                />
+              </>
+            ) : (
+              <>
+                <h3>Tisch: {popupDesk.name}</h3>
+                <div className="stack-sm">
+                  <p className="muted">Datum: {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
+                  <p className="muted">Zeitraum: Ganztägig</p>
+                  {popupDesk.booking?.type === 'recurring' && <p className="muted">Typ: Serienbuchung (wöchentlich)</p>}
+                  <div className="inline-end">
+                    <button type="button" className="btn btn-outline" onClick={() => setDeskPopup(null)}>Abbrechen</button>
+                    <button
+                      type="button"
+                      className="btn btn-danger"
+                      onClick={() => void submitPopupCancel()}
+                      disabled={popupDesk.booking?.type === 'recurring'}
+                    >
+                      Buchung stornieren
+                    </button>
+                  </div>
+                  {popupDesk.booking?.type === 'recurring' && <p className="muted">Serienbuchungen können derzeit nur im Admin-Modus storniert werden.</p>}
+                </div>
+              </>
+            )}
           </section>
         </>,
         document.body
