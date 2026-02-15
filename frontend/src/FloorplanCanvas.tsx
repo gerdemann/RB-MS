@@ -81,6 +81,12 @@ const getRoomMarkerLabel = (desk: Pick<FloorplanDesk, 'label' | 'shortLabel'>): 
 
 const getRoomName = (desk: Pick<FloorplanDesk, 'id' | 'name' | 'label'>): string => desk.name?.trim() || desk.label?.trim() || desk.id;
 
+const getResourceMarkerIcon = (kind?: string): string => {
+  if (kind === 'PARKPLATZ') return 'P';
+  if (kind === 'SONSTIGES') return '◼';
+  return '⌨';
+};
+
 const normalizeBookings = (desk: FloorplanDesk): FloorplanBooking[] => {
   if (desk.bookings && desk.bookings.length > 0) return desk.bookings;
   return desk.booking ? [desk.booking] : [];
@@ -273,10 +279,10 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
                         referrerPolicy="no-referrer"
                       />
                     )}
-                    <span className={`desk-pin-initials ${imgOk ? 'is-hidden' : ''}`}>{initials || '•'}</span>
+                    <span className={`desk-pin-initials ${imgOk ? 'is-hidden' : ''}`}>{initials || getResourceMarkerIcon(desk.kind)}</span>
                   </>
                 ) : (
-                  <span className="desk-pin-free-dot" aria-hidden="true" />
+                  <span className="desk-pin-kind-icon" aria-hidden="true">{getResourceMarkerIcon(desk.kind)}</span>
                 )}
               </span>
               {bookings.some((booking) => booking.isCurrentUser) && <span className="desk-pin-status-dot" aria-label="Deine Buchung" />}
