@@ -455,14 +455,14 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     setCancelConfirmOpen(false);
   };
 
-  const submitPopupBooking = async (deskId: string, payload: BookingSubmitPayload, overwrite = false) => {
+  const submitPopupBooking = async (deskId: string, payload: BookingSubmitPayload, overwrite = false, anchorRect?: DOMRect) => {
     if (!selectedEmployeeEmail) {
       throw new Error('Bitte Mitarbeiter auswählen.');
     }
 
     if (payload.type === 'single') {
       await post('/bookings', { deskId, userEmail: selectedEmployeeEmail, date: payload.date, replaceExisting: overwrite });
-      toast.success(overwrite ? 'Umbuchung durchgeführt.' : 'Gebucht');
+      toast.success(overwrite ? 'Umbuchung durchgeführt.' : 'Gebucht', { anchorRect });
       return;
     }
 
@@ -478,7 +478,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
       toast.success(overwrite
         ? `${response.createdCount ?? 0} Tage gebucht, ${response.updatedCount ?? 0} Tage umgebucht.`
-        : 'Gebucht');
+        : 'Gebucht', { anchorRect });
       return;
     }
 
@@ -493,19 +493,19 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
     toast.success(overwrite
       ? `${response.createdCount ?? 0} Tage gebucht, ${response.updatedCount ?? 0} Tage umgebucht.`
-      : 'Gebucht');
+      : 'Gebucht', { anchorRect });
   };
 
 
 
-  const handleBookingSubmit = async (payload: BookingSubmitPayload) => {
+  const handleBookingSubmit = async (payload: BookingSubmitPayload, anchorRect?: DOMRect) => {
     if (!deskPopup || !popupDesk || popupDeskState !== 'FREE') return;
 
     setDialogErrorMessage('');
     setBookingDialogState('SUBMITTING');
 
     try {
-      await submitPopupBooking(popupDesk.id, payload, false);
+      await submitPopupBooking(popupDesk.id, payload, false, anchorRect);
       closeBookingFlow();
       await reloadBookings();
     } catch (error) {
@@ -538,13 +538,13 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     }
   };
 
-  const confirmRebook = async () => {
+  const confirmRebook = async (anchorRect?: DOMRect) => {
     if (!rebookConfirm) return;
 
     setIsRebooking(true);
 
     try {
-      await submitPopupBooking(rebookConfirm.deskId, rebookConfirm.retryPayload, true);
+      await submitPopupBooking(rebookConfirm.deskId, rebookConfirm.retryPayload, true, anchorRect);
       setRebookConfirm(null);
       setIsRebooking(false);
       closeBookingFlow();
@@ -869,23 +869,13 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
       {rebookConfirm && createPortal(
         <div className="overlay" role="presentation">
-          <section className="card dialog stack-sm rebook-dialog" role="dialog" aria-modal="true" aria-labelledby="rebook-title">
-            <h3 id="rebook-title">Umbuchen?</h3>
-            <p>
-              Du hast am <strong className="rebook-date">{formatDate(rebookConfirm.date)}</strong> bereits eine Buchung.
-              <br />
-              Möchtest du diese auf Tisch {rebookConfirm.deskLabel} umbuchen?
-            </p>
-            {rebookConfirm.existingDeskLabel && <p className="muted rebook-subline">Aktueller Tisch: {rebookConfirm.existingDeskLabel}</p>}
-            {rebookErrorMessage && <div className="error-banner" role="alert">{rebookErrorMessage}</div>}
-            <div className="inline-end rebook-actions">
           <section className="card dialog stack-sm" role="dialog" aria-modal="true" aria-labelledby="rebook-title">
             <h3 id="rebook-title">Bestehende Buchung gefunden</h3>
             <p className="muted">Du hast am {formatDate(rebookConfirm.date)} bereits eine Buchung. Soll diese auf Tisch {rebookConfirm.deskLabel} umgebucht werden?</p>
             {rebookConfirm.existingDeskLabel && <p className="muted">Aktueller Tisch: {rebookConfirm.existingDeskLabel}</p>}
             <div className="inline-end">
               <button type="button" className="btn btn-outline" onClick={cancelRebook} disabled={isRebooking}>Abbrechen</button>
-              <button type="button" className="btn btn-danger" onClick={() => void confirmRebook()} disabled={isRebooking}>
+              <button type="button" className="btn btn-danger" onClick={(event) => void confirmRebook(event.currentTarget.getBoundingClientRect())} disabled={isRebooking}>
                 {isRebooking ? 'Umbuchen…' : 'Umbuchen'}
               </button>
             </div>

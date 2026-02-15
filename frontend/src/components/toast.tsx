@@ -1,4 +1,5 @@
-import { createContext, ReactNode, useCallback, useContext, useMemo, useRef, useState } from 'react';
+import { createContext, CSSProperties, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 
 type ToastVariant = 'success' | 'error';
 
@@ -6,11 +7,28 @@ type ToastInput = {
   message: string;
   variant?: ToastVariant;
   durationMs?: number;
+  anchorRect?: DOMRect;
+  placement?: ToastPlacement;
 };
 
-type ToastItem = ToastInput & {
+type ToastPlacement = 'top' | 'bottom' | 'left' | 'right' | 'auto';
+
+type NormalizedRect = {
+  top: number;
+  left: number;
+  right: number;
+  bottom: number;
+  width: number;
+  height: number;
+};
+
+type ToastItem = {
   id: number;
+  message: string;
   variant: ToastVariant;
+  durationMs?: number;
+  placement: ToastPlacement;
+  anchorRect?: NormalizedRect;
   expiresAt: number;
   remainingMs: number;
   isLeaving: boolean;
@@ -18,11 +36,18 @@ type ToastItem = ToastInput & {
 
 type ToastContextValue = {
   toast: (input: ToastInput) => void;
-  success: (message: string) => void;
-  error: (message: string) => void;
+  success: (message: string, options?: Omit<ToastInput, 'message' | 'variant'>) => void;
+  error: (message: string, options?: Omit<ToastInput, 'message' | 'variant'>) => void;
 };
 
 const EXIT_ANIMATION_MS = 180;
+const EDGE_PADDING = 8;
+const TOAST_OFFSET = 12;
+const STACK_GAP = 8;
+const FALLBACK_TOP = 76;
+const FALLBACK_RIGHT = 16;
+const DEFAULT_TOAST_WIDTH = 320;
+const DEFAULT_TOAST_HEIGHT = 64;
 
 const DEFAULT_DURATION_MS: Record<ToastVariant, number> = {
   success: 2800,
@@ -33,7 +58,21 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [positions, setPositions] = useState<Record<number, CSSProperties>>({});
   const timersRef = useRef<Map<number, number>>(new Map());
+  const elementsRef = useRef<Map<number, HTMLElement>>(new Map());
+
+  const normalizeRect = useCallback((rect?: DOMRect): NormalizedRect | undefined => {
+    if (!rect) return undefined;
+    return {
+      top: rect.top,
+      left: rect.left,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
+    };
+  }, []);
 
   const clearTimer = useCallback((toastId: number) => {
     const timer = timersRef.current.get(toastId);
@@ -92,29 +131,139 @@ export function ToastProvider({ children }: { children: ReactNode }) {
       ...input,
       id,
       variant,
+      placement: input.placement ?? 'auto',
+      anchorRect: normalizeRect(input.anchorRect),
       expiresAt: now + durationMs,
       remainingMs: durationMs,
       isLeaving: false,
     }]);
 
     scheduleDismiss(id, durationMs);
-  }, [scheduleDismiss]);
+  }, [normalizeRect, scheduleDismiss]);
 
   const value = useMemo<ToastContextValue>(() => ({
     toast,
-    success: (message: string) => toast({ message, variant: 'success' }),
-    error: (message: string) => toast({ message, variant: 'error' }),
+    success: (message: string, options) => toast({ message, variant: 'success', ...options }),
+    error: (message: string, options) => toast({ message, variant: 'error', ...options }),
   }), [toast]);
+
+  useEffect(() => {
+    if (toasts.length === 0) {
+      setPositions({});
+      return;
+    }
+
+    const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    const nextPositions: Record<number, CSSProperties> = {};
+    const stackAnchors: Array<{ x: number; y: number; left: number; top: number; height: number; }> = [];
+
+    const placeToast = (toastItem: ToastItem, width: number, height: number) => {
+      const maxLeft = Math.max(EDGE_PADDING, viewportWidth - width - EDGE_PADDING);
+      const maxTop = Math.max(EDGE_PADDING, viewportHeight - height - EDGE_PADDING);
+
+      if (!toastItem.anchorRect) {
+        return {
+          left: clamp(viewportWidth - width - FALLBACK_RIGHT, EDGE_PADDING, maxLeft),
+          top: clamp(FALLBACK_TOP, EDGE_PADDING, maxTop),
+        };
+      }
+
+      const rect = toastItem.anchorRect;
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+
+      const candidates = {
+        right: { left: rect.right + TOAST_OFFSET, top: centerY - (height / 2) },
+        bottom: { left: centerX - (width / 2), top: rect.bottom + TOAST_OFFSET },
+        top: { left: centerX - (width / 2), top: rect.top - height - TOAST_OFFSET },
+        left: { left: rect.left - width - TOAST_OFFSET, top: centerY - (height / 2) }
+      };
+
+      const fits = (candidate: { left: number; top: number }) => (
+        candidate.left >= EDGE_PADDING
+        && candidate.top >= EDGE_PADDING
+        && candidate.left + width <= viewportWidth - EDGE_PADDING
+        && candidate.top + height <= viewportHeight - EDGE_PADDING
+      );
+
+      const order: Array<Exclude<ToastPlacement, 'auto'>> = toastItem.placement === 'auto'
+        ? ['right', 'bottom', 'top', 'left']
+        : [toastItem.placement];
+
+      const selected = order.find((placement) => fits(candidates[placement])) ?? order[0];
+      const candidate = candidates[selected];
+
+      return {
+        left: clamp(candidate.left, EDGE_PADDING, maxLeft),
+        top: clamp(candidate.top, EDGE_PADDING, maxTop),
+        centerX,
+        centerY
+      };
+    };
+
+    toasts.forEach((toastItem) => {
+      const element = elementsRef.current.get(toastItem.id);
+      const width = Math.min(element?.offsetWidth ?? DEFAULT_TOAST_WIDTH, DEFAULT_TOAST_WIDTH);
+      const height = element?.offsetHeight ?? DEFAULT_TOAST_HEIGHT;
+      const basePosition = placeToast(toastItem, width, height);
+      let { left, top } = basePosition;
+
+      if (typeof basePosition.centerX === 'number' && typeof basePosition.centerY === 'number') {
+        const stackWith = stackAnchors.find((anchor) => (
+          Math.abs(anchor.x - basePosition.centerX!) < 36
+          && Math.abs(anchor.y - basePosition.centerY!) < 36
+        ));
+
+        if (stackWith) {
+          left = stackWith.left;
+          top = clamp(stackWith.top + stackWith.height + STACK_GAP, EDGE_PADDING, Math.max(EDGE_PADDING, viewportHeight - height - EDGE_PADDING));
+          stackWith.top = top;
+          stackWith.height = height;
+        } else {
+          stackAnchors.push({ x: basePosition.centerX, y: basePosition.centerY, left, top, height });
+        }
+      }
+
+      nextPositions[toastItem.id] = { left: `${left}px`, top: `${top}px` };
+    });
+
+    setPositions(nextPositions);
+  }, [toasts]);
+
+  useEffect(() => {
+    if (toasts.length === 0) return;
+    const recalculate = () => {
+      setToasts((current) => [...current]);
+    };
+    window.addEventListener('resize', recalculate);
+    window.addEventListener('scroll', recalculate, true);
+    return () => {
+      window.removeEventListener('resize', recalculate);
+      window.removeEventListener('scroll', recalculate, true);
+    };
+  }, [toasts.length]);
 
   return (
     <ToastContext.Provider value={value}>
       {children}
-      <div className="toast-viewport" aria-live="polite" aria-atomic="false">
+      {createPortal(
+        <div className="toast-viewport" aria-live="polite" aria-atomic="false">
         {toasts.map((item) => (
           <article
             key={item.id}
             className={`toast toast-${item.variant} ${item.isLeaving ? 'toast-leave' : 'toast-enter'}`}
             role="status"
+            style={positions[item.id]}
+            ref={(node) => {
+              if (node) {
+                elementsRef.current.set(item.id, node);
+                return;
+              }
+              elementsRef.current.delete(item.id);
+            }}
             onMouseEnter={() => pauseDismiss(item.id)}
             onMouseLeave={() => resumeDismiss(item.id)}
           >
@@ -132,7 +281,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             </button>
           </article>
         ))}
-      </div>
+      </div>,
+        document.body
+      )}
     </ToastContext.Provider>
   );
 }

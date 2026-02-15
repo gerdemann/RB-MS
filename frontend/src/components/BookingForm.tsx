@@ -41,7 +41,7 @@ const weekdayButtons = [
 export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting, disabled, errorMessage }: {
   values: BookingFormValues;
   onChange: (next: BookingFormValues) => void;
-  onSubmit: (payload: BookingFormSubmitPayload) => Promise<void>;
+  onSubmit: (payload: BookingFormSubmitPayload, anchorRect?: DOMRect) => Promise<void>;
   onCancel: () => void;
   isSubmitting: boolean;
   disabled: boolean;
@@ -93,6 +93,8 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setLocalError('');
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLElement | null;
+    const anchorRect = submitter?.getBoundingClientRect();
 
     if (isFormInvalid) {
       setLocalError('Bitte prüfe die markierten Felder.');
@@ -103,7 +105,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
       ? { type: 'single', date: values.date }
       : { type: 'recurring', dateFrom: values.dateFrom, dateTo: values.dateTo, weekdays: values.weekdays };
 
-    await onSubmit(payload);
+    await onSubmit(payload, anchorRect);
   };
 
   const handleKeyDown = (event: KeyboardEvent<HTMLFormElement>) => {
