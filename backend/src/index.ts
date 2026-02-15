@@ -7,6 +7,8 @@ import { prisma } from './prisma';
 
 const app = express();
 const port = Number(process.env.PORT ?? 3000);
+const configuredTitle = process.env.APP_TITLE ?? process.env.PAGE_TITLE ?? process.env.VITE_PAGE_TITLE;
+const APP_TITLE = configuredTitle?.trim() || 'RB-MS';
 app.set('trust proxy', 1);
 
 const ADMIN_EMAIL = process.env.ADMIN_EMAIL?.trim().toLowerCase();
@@ -814,18 +816,18 @@ const resolveEffectiveAllowSeries = (desk: { allowSeriesOverride: boolean | null
 app.get('/health', async (_req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    res.status(200).json({ status: 'ok' });
+    res.status(200).json({ status: 'ok', title: APP_TITLE });
   } catch {
-    res.status(500).json({ status: 'error' });
+    res.status(500).json({ status: 'error', title: APP_TITLE });
   }
 });
 
 app.get('/api/health', async (_req, res) => {
   try {
     await prisma.$queryRaw`SELECT 1`;
-    res.status(200).json({ status: 'ok' });
+    res.status(200).json({ status: 'ok', title: APP_TITLE });
   } catch {
-    res.status(500).json({ status: 'error' });
+    res.status(500).json({ status: 'error', title: APP_TITLE });
   }
 });
 
@@ -3224,7 +3226,7 @@ app.patch('/admin/recurring-bookings/:id', requireAdmin, async (req, res) => {
 const start = async () => {
   await ensureBreakglassAdmin();
   app.listen(port, '0.0.0.0', () => {
-    console.log(`API listening on ${port}`);
+    console.log(`${APP_TITLE} API listening on ${port}`);
   });
 };
 

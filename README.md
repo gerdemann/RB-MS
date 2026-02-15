@@ -82,6 +82,9 @@
 ### Entra (optional)
 - `ENTRA_LOGOUT_REDIRECT=https://rb-ms-1.onrender.com/#/login`
 
+### Backend (optional)
+- `APP_TITLE=RB-MS` (fällt sonst auf `PAGE_TITLE`/`VITE_PAGE_TITLE` zurück)
+
 ### Dev/Test Auth Bypass (optional, niemals Produktion)
 - `AUTH_BYPASS=true` aktiviert im Backend den Header-Bypass **nur** wenn `NODE_ENV != production` **und** der Dienst nicht auf Render läuft
 - Mit Header `x-dev-user: admin` wird ein lokaler Admin-User (`dev@local`) gesetzt
@@ -90,6 +93,8 @@
 - `VITE_API_BASE_URL=https://rb-ms.onrender.com`
 
 ### Frontend (optional)
+- `VITE_PAGE_TITLE=RB-MS`
+- `COMPANY_LOGO_URL=https://.../logo.svg` (oder `VITE_COMPANY_LOGO_URL`) für das Header-Logo links
 - `VITE_BREAKGLASS_PATH=/#/breakglass`
 - `VITE_AUTH_BYPASS=true` erlaubt in Preview-Builds den Dev-Header bei `?devAuth=1`
 
@@ -108,5 +113,5 @@
 ## Qualitätschecks
 - Frontend: `npm run build`
 - Backend: `npm run build`
-- Health: `GET /health` liefert `{ status: "ok" }`
+- Health: `GET /health` liefert `{ status: "ok", title: "..." }`
 - CORS + Cookie-Credentials für Frontend ↔ Backend aktiviert
