@@ -178,24 +178,40 @@ const getConflictKindLabel = (error: ApiError): string | undefined => {
   return resourceKindLabel(details.details.conflictKind);
 };
 
-const mapBookingsForDay = (desks: OccupancyDesk[]): OccupantForDay[] => desks
-  .filter((desk) => desk.booking)
-  .map((desk) => {
-    const fullName = desk.booking?.userDisplayName ?? desk.booking?.userEmail ?? 'Unbekannt';
+const getOccupantIdentityKey = (occupant: OccupantForDay): string => {
+  if (occupant.employeeId?.trim()) return `employee:${occupant.employeeId}`;
+  if (occupant.email.trim()) return `email:${occupant.email.toLowerCase()}`;
+  return `user:${occupant.userId}`;
+};
 
-    return {
-      deskId: desk.id,
-      deskLabel: desk.name,
-      deskKindLabel: resourceKindLabel(desk.kind),
-      userId: desk.booking?.id ?? desk.booking?.employeeId ?? desk.booking?.userEmail ?? `${desk.id}-occupant`,
-      name: fullName,
-      firstName: getFirstName({ firstName: desk.booking?.userFirstName, displayName: fullName, email: desk.booking?.userEmail }),
-      email: desk.booking?.userEmail ?? '',
-      employeeId: desk.booking?.employeeId,
-      photoUrl: desk.booking?.userPhotoUrl
-    };
-  })
-  .sort((a, b) => a.name.localeCompare(b.name, 'de'));
+const mapBookingsForDay = (desks: OccupancyDesk[]): OccupantForDay[] => {
+  const uniqueOccupants = new Map<string, OccupantForDay>();
+
+  desks
+    .filter((desk) => desk.booking)
+    .forEach((desk) => {
+      const fullName = desk.booking?.userDisplayName ?? desk.booking?.userEmail ?? 'Unbekannt';
+
+      const occupant: OccupantForDay = {
+        deskId: desk.id,
+        deskLabel: desk.name,
+        deskKindLabel: resourceKindLabel(desk.kind),
+        userId: desk.booking?.id ?? desk.booking?.employeeId ?? desk.booking?.userEmail ?? `${desk.id}-occupant`,
+        name: fullName,
+        firstName: getFirstName({ firstName: desk.booking?.userFirstName, displayName: fullName, email: desk.booking?.userEmail }),
+        email: desk.booking?.userEmail ?? '',
+        employeeId: desk.booking?.employeeId,
+        photoUrl: desk.booking?.userPhotoUrl
+      };
+
+      const occupantKey = getOccupantIdentityKey(occupant);
+      if (!uniqueOccupants.has(occupantKey)) {
+        uniqueOccupants.set(occupantKey, occupant);
+      }
+    });
+
+  return Array.from(uniqueOccupants.values()).sort((a, b) => a.name.localeCompare(b.name, 'de'));
+};
 
 const enrichDeskBookings = ({
   desks,
