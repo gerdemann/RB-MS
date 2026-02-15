@@ -1,4 +1,4 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { FormEvent, MouseEvent as ReactMouseEvent, ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { del, get, patch, post, resolveApiUrl } from '../api';
 import { Avatar } from '../components/Avatar';
@@ -97,7 +97,7 @@ function ConfirmDialog({
 }: {
   title: string;
   description: ReactNode;
-  onConfirm: () => void;
+  onConfirm: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   onCancel: () => void;
   confirmDisabled?: boolean;
   cancelDisabled?: boolean;
@@ -106,7 +106,7 @@ function ConfirmDialog({
 }) {
   const confirmClassName = confirmVariant === 'danger' ? 'btn btn-danger' : 'btn';
   return (
-    <div className="overlay"><section className="card dialog stack-sm" role="dialog" aria-modal="true"><h3>{title}</h3>{typeof description === "string" ? <p className="muted">{description}</p> : description}<div className="inline-end"><button className="btn btn-outline" disabled={cancelDisabled} onClick={onCancel}>Abbrechen</button><button className={confirmClassName} disabled={confirmDisabled} onClick={onConfirm}>{confirmLabel}</button></div></section></div>
+    <div className="overlay"><section className="card dialog stack-sm" role="dialog" aria-modal="true"><h3>{title}</h3>{typeof description === "string" ? <p className="muted">{description}</p> : description}<div className="inline-end"><button className="btn btn-outline" disabled={cancelDisabled} onClick={onCancel}>Abbrechen</button><button className={confirmClassName} disabled={confirmDisabled} onClick={(event) => onConfirm(event)}>{confirmLabel}</button></div></section></div>
   );
 }
 
@@ -445,7 +445,7 @@ function FloorplansPage({ path, navigate, onLogout, currentUser }: RouteProps) {
         {!state.loading && filtered.length === 0 && <EmptyState text="Keine Floorpläne vorhanden." action={<button className="btn" onClick={() => setShowCreate(true)}>Neu anlegen</button>} />}
       </section>
       {(showCreate || editing) && <FloorplanEditor floorplan={editing} onClose={() => { setShowCreate(false); setEditing(null); navigate('/admin/floorplans'); }} onSaved={async () => { setShowCreate(false); setEditing(null); toasts.success('Floorplan gespeichert'); await load(); }} onError={toasts.error} />}
-      {pendingDelete && <ConfirmDialog title="Floorplan löschen?" description={`"${pendingDelete.name}" wird dauerhaft entfernt.`} onCancel={() => setPendingDelete(null)} onConfirm={async () => { await del(`/admin/floorplans/${pendingDelete.id}`); setPendingDelete(null); toasts.success('Floorplan gelöscht'); await load(); }} />}
+      {pendingDelete && <ConfirmDialog title="Floorplan löschen?" description={`"${pendingDelete.name}" wird dauerhaft entfernt.`} onCancel={() => setPendingDelete(null)} onConfirm={async (event) => { const anchorRect = event.currentTarget.getBoundingClientRect(); await del(`/admin/floorplans/${pendingDelete.id}`); setPendingDelete(null); toasts.success('Floorplan gelöscht', { anchorRect }); await load(); }} />}
     </AdminLayout>
   );
 }
@@ -726,13 +726,13 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
     }
   };
 
-  const confirmSavePosition = async () => {
+  const confirmSavePosition = async (anchorRect?: DOMRect) => {
     if (!pendingRepositionDesk || !pendingRepositionCoords || isSavingPosition) return;
     setIsSavingPosition(true);
     setSavePositionError('');
     try {
       await patch(`/admin/desks/${pendingRepositionDesk.id}`, pendingRepositionCoords);
-      toasts.success('Position gespeichert');
+      toasts.success('Position gespeichert', { anchorRect });
       cancelModes();
       await loadDesks(floorplanId);
     } catch (err) {
@@ -773,13 +773,13 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
     });
   };
 
-  const runBulkDelete = async () => {
+  const runBulkDelete = async (anchorRect?: DOMRect) => {
     if (selectedDeskIds.size === 0 || isBulkDeleting) return;
     setIsBulkDeleting(true);
     try {
       const selectedIds = Array.from(selectedDeskIds);
       await del(`/admin/desks?ids=${encodeURIComponent(selectedIds.join(','))}`);
-      toasts.success(`${selectedIds.length} Tisch(e) gelöscht`);
+      toasts.success(`${selectedIds.length} Tisch(e) gelöscht`, { anchorRect });
       setBulkDeleteOpen(false);
       clearSelection();
       await loadDesks(floorplanId);
@@ -966,14 +966,14 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
       </section>
 
       {(createRequest || editingDesk) && <DeskEditor desk={editingDesk} floorplans={floorplans} defaultFloorplanId={floorplanId} initialPosition={createRequest} lockFloorplan={Boolean(createRequest)} onRequestPositionMode={editingDesk ? () => { setPendingRepositionDesk(editingDesk); setPendingRepositionCoords(null); setSavePositionError(''); setCanvasMode('reposition'); } : undefined} onClose={() => { setCreateRequest(null); setEditingDesk(null); navigate('/admin/desks'); }} onSaved={async () => { setCreateRequest(null); setEditingDesk(null); toasts.success('Tisch gespeichert'); await loadDesks(floorplanId); }} onError={toasts.error} />}
-      {!isSavePositionDialogOpen && deleteDesk && <ConfirmDialog title="Tisch löschen?" description={`Tisch "${deleteDesk.name}" wird entfernt.`} onCancel={() => setDeleteDesk(null)} onConfirm={async () => { await del(`/admin/desks/${deleteDesk.id}`); setDeleteDesk(null); toasts.success('Tisch gelöscht'); await loadDesks(floorplanId); }} />}
-      {!isSavePositionDialogOpen && bulkDeleteOpen && <ConfirmDialog title={`${selectedDeskIds.size} Einträge löschen?`} description="Dieser Vorgang ist irreversibel." onCancel={() => setBulkDeleteOpen(false)} onConfirm={() => void runBulkDelete()} confirmDisabled={isBulkDeleting} confirmLabel={isBulkDeleting ? 'Lösche…' : 'Löschen'} />}
+      {!isSavePositionDialogOpen && deleteDesk && <ConfirmDialog title="Tisch löschen?" description={`Tisch "${deleteDesk.name}" wird entfernt.`} onCancel={() => setDeleteDesk(null)} onConfirm={async (event) => { const anchorRect = event.currentTarget.getBoundingClientRect(); await del(`/admin/desks/${deleteDesk.id}`); setDeleteDesk(null); toasts.success('Tisch gelöscht', { anchorRect }); await loadDesks(floorplanId); }} />}
+      {!isSavePositionDialogOpen && bulkDeleteOpen && <ConfirmDialog title={`${selectedDeskIds.size} Einträge löschen?`} description="Dieser Vorgang ist irreversibel." onCancel={() => setBulkDeleteOpen(false)} onConfirm={(event) => void runBulkDelete(event.currentTarget.getBoundingClientRect())} confirmDisabled={isBulkDeleting} confirmLabel={isBulkDeleting ? 'Lösche…' : 'Löschen'} />}
       {isSavePositionDialogOpen && pendingRepositionDesk && pendingRepositionCoords && (
         <ConfirmDialog
           title="Position speichern?"
           description={<><p>Möchtest du die neue Position für diesen Tisch speichern?</p><p>Die bisherige Position wird überschrieben.</p>{savePositionError && <p className="error-banner">{savePositionError}</p>}</>}
           onCancel={() => { setCanvasMode('reposition'); setSavePositionError(''); }}
-          onConfirm={() => void confirmSavePosition()}
+          onConfirm={(event) => void confirmSavePosition(event.currentTarget.getBoundingClientRect())}
           confirmDisabled={isSavingPosition}
           cancelDisabled={isSavingPosition}
           confirmLabel={isSavingPosition ? <><span className="btn-spinner" aria-hidden />Speichern…</> : 'Speichern'}
@@ -1046,12 +1046,12 @@ function BookingsPage({ path, navigate, onLogout, currentUser }: RouteProps) {
     }
     setSelectedBookingIds((current) => Array.from(new Set([...current, ...filtered.map((booking) => booking.id)])));
   };
-  const runBulkDelete = async () => {
+  const runBulkDelete = async (anchorRect?: DOMRect) => {
     if (selectedBookingIds.length === 0 || isBulkDeleting) return;
     setIsBulkDeleting(true);
     try {
       await del(`/admin/bookings?ids=${encodeURIComponent(selectedBookingIds.join(','))}`);
-      toasts.success(`${selectedBookingIds.length} Buchung(en) gelöscht`);
+      toasts.success(`${selectedBookingIds.length} Buchung(en) gelöscht`, { anchorRect });
       setBulkDeleteOpen(false);
       setSelectedBookingIds([]);
       await load();
@@ -1071,8 +1071,8 @@ function BookingsPage({ path, navigate, onLogout, currentUser }: RouteProps) {
       rightContent={focusedFloor ? <div className="canvas-body"><FloorplanCanvas imageUrl={resolveApiUrl(focusedFloor.imageUrl) ?? focusedFloor.imageUrl} imageAlt={focusedFloor.name} desks={focusedDesks} selectedDeskId={focusedDesk?.id ?? ''} hoveredDeskId="" onHoverDesk={() => undefined} onSelectDesk={() => undefined} /></div> : <EmptyState text="Buchung auswählen, um den Tisch im Floorplan zu sehen." />}
     />
     {(creating || editing) && <BookingEditor booking={editing} desks={desks} employees={employees} floorplans={floorplans} onClose={() => { setCreating(false); setEditing(null); navigate('/admin/bookings'); }} onSaved={async (m) => { toasts.success(m); setCreating(false); setEditing(null); await load(); }} onError={toasts.error} />}
-    {deleteBooking && <ConfirmDialog title="Buchung löschen?" description="Die ausgewählte Buchung wird entfernt." onCancel={() => setDeleteBooking(null)} onConfirm={async () => { await del(`/admin/bookings/${deleteBooking.id}`); setDeleteBooking(null); toasts.success('Buchung gelöscht'); await load(); }} />}
-    {bulkDeleteOpen && <ConfirmDialog title={`${selectedBookingIds.length} Einträge löschen?`} description="Dieser Vorgang ist irreversibel." onCancel={() => setBulkDeleteOpen(false)} onConfirm={() => void runBulkDelete()} confirmDisabled={isBulkDeleting} confirmLabel={isBulkDeleting ? 'Lösche…' : 'Löschen'} />}
+    {deleteBooking && <ConfirmDialog title="Buchung löschen?" description="Die ausgewählte Buchung wird entfernt." onCancel={() => setDeleteBooking(null)} onConfirm={async (event) => { const anchorRect = event.currentTarget.getBoundingClientRect(); await del(`/admin/bookings/${deleteBooking.id}`); setDeleteBooking(null); toasts.success('Buchung gelöscht', { anchorRect }); await load(); }} />}
+    {bulkDeleteOpen && <ConfirmDialog title={`${selectedBookingIds.length} Einträge löschen?`} description="Dieser Vorgang ist irreversibel." onCancel={() => setBulkDeleteOpen(false)} onConfirm={(event) => void runBulkDelete(event.currentTarget.getBoundingClientRect())} confirmDisabled={isBulkDeleting} confirmLabel={isBulkDeleting ? 'Lösche…' : 'Löschen'} />}
   </AdminLayout>;
 }
 
@@ -1170,7 +1170,7 @@ function EmployeesPage({ path, navigate, onRoleStateChanged, onLogout, currentAd
         {!state.loading && filtered.length === 0 && <EmptyState text="Keine Mitarbeitenden vorhanden." action={<button className="btn" onClick={() => setCreating(true)}>Neu anlegen</button>} />}
       </section>
       {(creating || editing) && <EmployeeEditor employee={editing} onClose={() => { setCreating(false); setEditing(null); navigate('/admin/employees'); }} onSaved={async () => { setCreating(false); setEditing(null); toasts.success('Mitarbeiter gespeichert'); await load(); await onRoleStateChanged(); }} onError={toasts.error} />}
-      {pendingDeactivate && <ConfirmDialog title="Mitarbeiter deaktivieren?" description={`${pendingDeactivate.displayName} wird auf inaktiv gesetzt.`} onCancel={() => setPendingDeactivate(null)} onConfirm={async () => { await patch(`/admin/employees/${pendingDeactivate.id}`, { isActive: false }); setPendingDeactivate(null); toasts.success('Mitarbeiter deaktiviert'); await load(); }} />}
+      {pendingDeactivate && <ConfirmDialog title="Mitarbeiter deaktivieren?" description={`${pendingDeactivate.displayName} wird auf inaktiv gesetzt.`} onCancel={() => setPendingDeactivate(null)} onConfirm={async (event) => { const anchorRect = event.currentTarget.getBoundingClientRect(); await patch(`/admin/employees/${pendingDeactivate.id}`, { isActive: false }); setPendingDeactivate(null); toasts.success('Mitarbeiter deaktiviert', { anchorRect }); await load(); }} />}
     </AdminLayout>
   );
 }
