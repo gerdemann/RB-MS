@@ -52,8 +52,8 @@ model Desk {
   name              String
   kind              ResourceKind       @default(TISCH)
   allowSeriesOverride Boolean?
-  x                 Float
-  y                 Float
+  x                 Float?
+  y                 Float?
   createdAt         DateTime           @default(now())
   floorplan         Floorplan          @relation(fields: [floorplanId], references: [id], onDelete: Cascade)
   bookings          Booking[]

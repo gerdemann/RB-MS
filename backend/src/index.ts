@@ -1827,6 +1827,7 @@ app.get('/floorplans/:id/desks', async (req, res) => {
     kind: desk.kind,
     allowSeriesOverride: desk.allowSeriesOverride,
     effectiveAllowSeries: resolveEffectiveAllowSeries(desk),
+    position: desk.x === null || desk.y === null ? null : { x: desk.x, y: desk.y },
     x: desk.x,
     y: desk.y,
     createdAt: desk.createdAt
@@ -2483,6 +2484,7 @@ app.get('/occupancy', async (req, res) => {
       id: desk.id,
       name: desk.name,
       kind: desk.kind,
+      position: desk.x === null || desk.y === null ? null : { x: desk.x, y: desk.y },
       x: desk.x,
       y: desk.y,
       allowSeriesOverride: desk.allowSeriesOverride,
@@ -3055,11 +3057,26 @@ app.post('/admin/floorplans/:id/desks', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number; y?: number; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
+  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
   const parsedKind = typeof kind === 'undefined' ? null : parseResourceKind(kind);
 
-  if (!name || typeof x !== 'number' || typeof y !== 'number') {
-    res.status(400).json({ error: 'validation', message: 'name, x and y are required' });
+  if (!name) {
+    res.status(400).json({ error: 'validation', message: 'name is required' });
+    return;
+  }
+
+  if ((x === null) !== (y === null)) {
+    res.status(400).json({ error: 'validation', message: 'x and y must be provided together or both null' });
+    return;
+  }
+
+  if (typeof x !== 'undefined' && x !== null && typeof x !== 'number') {
+    res.status(400).json({ error: 'validation', message: 'x must be a number or null' });
+    return;
+  }
+
+  if (typeof y !== 'undefined' && y !== null && typeof y !== 'number') {
+    res.status(400).json({ error: 'validation', message: 'y must be a number or null' });
     return;
   }
 
@@ -3083,8 +3100,8 @@ app.post('/admin/floorplans/:id/desks', requireAdmin, async (req, res) => {
     data: {
       floorplanId: id,
       name: name.slice(0, 60),
-      x,
-      y,
+      x: typeof x === 'undefined' ? null : x,
+      y: typeof y === 'undefined' ? null : y,
       kind: parsedKind ?? floorplan.defaultResourceKind,
       ...(typeof allowSeriesOverride !== 'undefined' ? { allowSeriesOverride } : {})
     }
@@ -3129,7 +3146,7 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number; y?: number; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
+  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
   const hasName = typeof name !== 'undefined';
   const hasX = typeof x !== 'undefined';
   const hasY = typeof y !== 'undefined';
@@ -3148,13 +3165,18 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  if (hasX && typeof x !== 'number') {
-    res.status(400).json({ error: 'validation', message: 'x must be a number' });
+  if (hasX && x !== null && typeof x !== 'number') {
+    res.status(400).json({ error: 'validation', message: 'x must be a number or null' });
     return;
   }
 
-  if (hasY && typeof y !== 'number') {
-    res.status(400).json({ error: 'validation', message: 'y must be a number' });
+  if (hasY && y !== null && typeof y !== 'number') {
+    res.status(400).json({ error: 'validation', message: 'y must be a number or null' });
+    return;
+  }
+
+  if ((hasX || hasY) && (x === null) !== (y === null)) {
+    res.status(400).json({ error: 'validation', message: 'x and y must be provided together or both null' });
     return;
   }
 
@@ -3169,7 +3191,7 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const data: { name?: string; x?: number; y?: number; kind?: ResourceKind; allowSeriesOverride?: boolean | null } = {};
+  const data: { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null } = {};
   if (hasName) data.name = name.trim().slice(0, 60);
   if (hasX) data.x = x;
   if (hasY) data.y = y;
@@ -3186,6 +3208,23 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     }
     throw error;
   }
+});
+
+app.post('/admin/desks/positions/mark-missing', requireAdmin, async (req, res) => {
+  const { floorplanId } = req.body as { floorplanId?: string };
+  const result = await prisma.desk.updateMany({
+    where: {
+      ...(floorplanId ? { floorplanId } : {}),
+      x: 0,
+      y: 0
+    },
+    data: {
+      x: null,
+      y: null
+    }
+  });
+
+  res.status(200).json({ updatedCount: result.count });
 });
 
 app.get('/admin/bookings', requireAdmin, async (req, res) => {

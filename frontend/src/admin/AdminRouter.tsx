@@ -10,7 +10,7 @@ import { RESOURCE_KIND_OPTIONS, resourceKindLabel, type ResourceKind } from '../
 
 type SeriesPolicy = 'DEFAULT' | 'ALLOW' | 'DISALLOW';
 type Floorplan = { id: string; name: string; imageUrl: string; isDefault?: boolean; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean; createdAt?: string; updatedAt?: string };
-type Desk = { id: string; floorplanId: string; name: string; kind?: ResourceKind; allowSeriesOverride?: boolean | null; effectiveAllowSeries?: boolean; x: number; y: number; createdAt?: string; updatedAt?: string };
+type Desk = { id: string; floorplanId: string; name: string; kind?: ResourceKind; allowSeriesOverride?: boolean | null; effectiveAllowSeries?: boolean; x: number | null; y: number | null; position?: { x: number; y: number } | null; createdAt?: string; updatedAt?: string };
 type Employee = { id: string; email: string; displayName: string; role: 'admin' | 'user'; isActive: boolean; photoUrl?: string | null; createdAt?: string; updatedAt?: string };
 type Booking = { id: string; deskId: string; userEmail: string; userDisplayName?: string; employeeId?: string; date: string; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string; createdAt?: string; updatedAt?: string };
 type DbColumn = { name: string; type: string; required: boolean; id: boolean; hasDefaultValue: boolean };
@@ -625,6 +625,14 @@ function DeskTableToolbar({
 
 const hasDeskPosition = (desk: Desk) => Number.isFinite(desk.x) && Number.isFinite(desk.y);
 
+const normalizeDeskPosition = (desk: Desk, imageSize: { width: number; height: number } | null): { x: number; y: number } | null => {
+  if (!Number.isFinite(desk.x) || !Number.isFinite(desk.y)) return null;
+  const raw = { x: Number(desk.x), y: Number(desk.y) };
+  const isLegacyPercent = raw.x >= 0 && raw.x <= 1 && raw.y >= 0 && raw.y <= 1;
+  if (isLegacyPercent && imageSize) return { x: raw.x * imageSize.width, y: raw.y * imageSize.height };
+  return raw;
+};
+
 const formatDateTimeShort = (value?: string) => {
   if (!value) return '—';
   const date = new Date(value);
@@ -656,6 +664,9 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const [savePositionError, setSavePositionError] = useState('');
   const [isSavingPosition, setIsSavingPosition] = useState(false);
   const [zoom, setZoom] = useState(1);
+  const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
+  const [renderSize, setRenderSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [isRepairingPositions, setIsRepairingPositions] = useState(false);
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
   const floorplan = floorplans.find((item) => item.id === floorplanId) ?? null;
@@ -741,18 +752,34 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
     setSavePositionError('');
   };
 
-  const onCanvasClick = async ({ xPct, yPct }: { xPct: number; yPct: number }) => {
-    const x = Math.max(0, Math.min(1, xPct));
-    const y = Math.max(0, Math.min(1, yPct));
+  const onCanvasClick = async ({ x, y, imageWidth, imageHeight }: { xPct: number; yPct: number; x: number; y: number; imageWidth: number; imageHeight: number }) => {
+    const clampedX = Math.max(0, Math.min(imageWidth, x));
+    const clampedY = Math.max(0, Math.min(imageHeight, y));
     if (canvasMode === 'create') {
-      setCreateRequest({ x, y });
+      setCreateRequest({ x: clampedX, y: clampedY });
       setCanvasMode('idle');
       return;
     }
     if (canvasMode === 'reposition' && pendingRepositionDesk) {
-      setPendingRepositionCoords({ x, y });
+      setPendingRepositionCoords({ x: clampedX, y: clampedY });
       setSavePositionError('');
       setCanvasMode('CONFIRM_SAVE_POSITION');
+    }
+  };
+
+  const debugEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1';
+
+  const runMissingPositionRepair = async () => {
+    if (isRepairingPositions) return;
+    setIsRepairingPositions(true);
+    try {
+      const response = await post<{ updatedCount: number }>('/admin/desks/positions/mark-missing', { floorplanId });
+      toasts.success(`${response.updatedCount} Ressourcen auf "ohne Position" gesetzt`);
+      await loadDesks(floorplanId);
+    } catch (error) {
+      toasts.error(error instanceof Error ? error.message : 'Positionen konnten nicht repariert werden');
+    } finally {
+      setIsRepairingPositions(false);
     }
   };
 
@@ -953,11 +980,10 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
                     imageUrl={floorplan.imageUrl}
                     imageAlt={floorplan.name}
                     desks={desks.filter(hasDeskPosition).map((desk) => ({
+                      ...(normalizeDeskPosition(desk, imageSize) ?? { x: null, y: null }),
                       id: desk.id,
                       name: desk.name,
                       kind: desk.kind,
-                      x: desk.x,
-                      y: desk.y,
                       status: 'free',
                       booking: null,
                       isSelected: selectedDeskIds.has(desk.id),
@@ -973,6 +999,9 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
                       const target = desks.find((desk) => desk.id === deskId);
                       if (target) setEditingDesk(target);
                     }}
+                    onImageLoad={({ width, height }) => setImageSize({ width, height })}
+                    onImageRenderSizeChange={setRenderSize}
+                    debugEnabled={debugEnabled}
                   />
                 </div>
               </div>
@@ -980,13 +1009,27 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
                 <Badge>Normal</Badge>
                 <Badge tone="ok">Ausgewählt</Badge>
                 <Badge tone="warn">Ohne Position: {desks.filter((desk) => !hasDeskPosition(desk)).length}</Badge>
+                <button className="btn btn-outline" type="button" disabled={isRepairingPositions} onClick={() => void runMissingPositionRepair()}>Top-left als fehlend markieren</button>
               </div>
+              {debugEnabled && (
+                <section className="card stack-xs">
+                  <strong>Floorplan Debug</strong>
+                  <p className="muted">imgW/imgH: {Math.round(imageSize?.width ?? 0)} / {Math.round(imageSize?.height ?? 0)}</p>
+                  <p className="muted">renderW/renderH: {Math.round(renderSize.width)} / {Math.round(renderSize.height)}</p>
+                  <p className="muted">scale/tx/ty: {zoom.toFixed(2)} / 0 / 0</p>
+                  <p className="muted">null positions: {desks.filter((desk) => !hasDeskPosition(desk)).length}</p>
+                  {desks.slice(0, 5).map((desk) => {
+                    const mapped = normalizeDeskPosition(desk, imageSize);
+                    return <p key={desk.id} className="muted">{desk.id}: x={desk.x ?? 'null'}, y={desk.y ?? 'null'}, left={mapped ? Math.round(mapped.x) : '—'}, top={mapped ? Math.round(mapped.y) : '—'}</p>;
+                  })}
+                </section>
+              )}
               {selectedDesk && (
                 <section className="card stack-xs desk-details-card">
                   <strong>{selectedDesk.name}</strong>
                   <p className="muted">Ressourcen-ID: {selectedDesk.id}</p>
                   <p className="muted">Art: {resourceKindLabel(selectedDesk.kind)}</p>
-                  <p className="muted">Koordinaten: {hasDeskPosition(selectedDesk) ? `${Math.round(selectedDesk.x * 100)}% / ${Math.round(selectedDesk.y * 100)}%` : 'Nicht gesetzt'}</p>
+                  <p className="muted">Koordinaten: {hasDeskPosition(selectedDesk) ? `${Math.round(selectedDesk.x ?? 0)}px / ${Math.round(selectedDesk.y ?? 0)}px` : 'Nicht gesetzt'}</p>
                   <p className="muted">Zuletzt aktualisiert: {formatDateTimeShort(selectedDesk.updatedAt ?? selectedDesk.createdAt)}</p>
                   <div className="inline-end">
                     <button className="btn btn-outline" onClick={() => setEditingDesk(selectedDesk)}>Bearbeiten</button>
