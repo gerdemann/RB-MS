@@ -815,6 +815,31 @@ type BookingTx = Prisma.TransactionClient;
 type BookingIdentity = { normalizedEmail: string; userKey: string; entraOid: string | null; emailAliases: string[] };
 type BookingWithDeskContext = Prisma.BookingGetPayload<{ include: { desk: { select: { name: true; kind: true } } } }>;
 type BookingWithCreator = Prisma.BookingGetPayload<{ include: { createdBy: { select: { id: true; displayName: true; email: true } } } }>;
+type CreatorSummary = { id: string; displayName: string; email: string };
+
+const resolveCreatedBySummary = (params: {
+  createdBy: { id: string; displayName: string | null; email: string } | null;
+  createdByUserId?: string | null;
+  fallbackUser?: CreatorSummary | null;
+}): CreatorSummary => {
+  if (params.createdBy) {
+    return {
+      id: params.createdBy.id,
+      displayName: params.createdBy.displayName?.trim() || params.createdBy.email,
+      email: params.createdBy.email
+    };
+  }
+
+  if (params.fallbackUser) {
+    return params.fallbackUser;
+  }
+
+  return {
+    id: params.createdByUserId?.trim() || 'legacy-missing-created-by',
+    displayName: 'Unbekannt',
+    email: ''
+  };
+};
 
 const bookingUserKeyForDate = (userKey: string, date: Date): string => `booking:user:${userKey}:date:${toISODateOnly(date)}`;
 const bookingDeskKeyForDate = (deskId: string, date: Date): string => `booking:desk:${deskId}:date:${toISODateOnly(date)}`;
@@ -1133,6 +1158,42 @@ const ensureBreakglassAdmin = async () => {
         passwordHash: defaultHash
       }
     });
+  }
+};
+
+const backfillLegacyBookingCreators = async () => {
+  const bookingsMissingCreator = await prisma.booking.findMany({
+    where: { createdByUserId: '' },
+    select: { id: true, userEmail: true, bookedFor: true }
+  });
+
+  if (bookingsMissingCreator.length === 0) {
+    return;
+  }
+
+  const usersByEmail = new Map((await prisma.user.findMany({
+    where: {
+      email: {
+        in: Array.from(new Set(bookingsMissingCreator.map((booking) => booking.userEmail).filter((email): email is string => Boolean(email)).map((email) => normalizeEmail(email))))
+      }
+    },
+    select: { id: true, email: true }
+  })).map((user) => [normalizeEmail(user.email), user.id]));
+
+  let updatedCount = 0;
+  for (const booking of bookingsMissingCreator) {
+    const fallbackCreatorId = booking.userEmail ? usersByEmail.get(normalizeEmail(booking.userEmail)) : undefined;
+    if (!fallbackCreatorId) {
+      console.warn('BOOKING_CREATOR_BACKFILL_SKIPPED', { bookingId: booking.id, bookedFor: booking.bookedFor, reason: 'no matching user' });
+      continue;
+    }
+
+    await prisma.booking.update({ where: { id: booking.id }, data: { createdByUserId: fallbackCreatorId } });
+    updatedCount += 1;
+  }
+
+  if (updatedCount > 0) {
+    console.info('BOOKING_CREATOR_BACKFILL_DONE', { total: bookingsMissingCreator.length, updated: updatedCount });
   }
 };
 
@@ -3472,7 +3533,10 @@ app.get('/admin/bookings', requireAdmin, async (req, res) => {
 
   const bookings = await prisma.booking.findMany({
     where,
-    include: { desk: { select: { kind: true } } },
+    include: {
+      desk: { select: { kind: true } },
+      createdBy: { select: { id: true, displayName: true, email: true } }
+    },
     orderBy: [{ date: 'asc' }, { createdAt: 'asc' }]
   });
 
@@ -3484,18 +3548,52 @@ app.get('/admin/bookings', requireAdmin, async (req, res) => {
   }
 
   const employeesByEmail = await getActiveEmployeesByEmail(bookings.map((booking) => booking.userEmail).filter((email): email is string => Boolean(email)));
+  const usersByEmail = new Map((await prisma.user.findMany({
+    where: {
+      email: {
+        in: Array.from(new Set(bookings.map((booking) => booking.userEmail).filter((email): email is string => Boolean(email)).map((email) => normalizeEmail(email))))
+      }
+    },
+    select: { id: true, email: true, displayName: true }
+  })).map((user) => [normalizeEmail(user.email), user]));
+
   const enrichedBookings = bookings.map((booking) => ({
+    ...(function () {
+      const normalizedUserEmail = booking.userEmail ? normalizeEmail(booking.userEmail) : null;
+      const employee = normalizedUserEmail ? employeesByEmail.get(normalizedUserEmail) : undefined;
+      const appUser = normalizedUserEmail ? usersByEmail.get(normalizedUserEmail) : undefined;
+      const fallbackUser = booking.userEmail
+        ? {
+          id: appUser?.id ?? booking.createdByUserId,
+          displayName: employee?.displayName ?? appUser?.displayName ?? booking.userEmail,
+          email: booking.userEmail
+        }
+        : null;
+      const createdBy = resolveCreatedBySummary({
+        createdBy: booking.createdBy,
+        createdByUserId: booking.createdByUserId,
+        fallbackUser
+      });
+
+      return {
+        createdBy,
+        createdByUserId: createdBy.id,
+        user: booking.bookedFor === 'SELF' && fallbackUser ? fallbackUser : null,
+        userDisplayName: employee?.displayName,
+        employeeId: employee?.id
+      };
+    })(),
     id: booking.id,
     deskId: booking.deskId,
     userEmail: booking.userEmail,
+    bookedFor: booking.bookedFor,
+    guestName: booking.guestName,
     date: booking.date,
     createdAt: booking.createdAt,
     daySlot: booking.daySlot ?? bookingSlotToDaySlot(booking.slot),
     slot: booking.slot,
     startTime: minuteToHHMM(booking.startMinute ?? (booking.startTime ? booking.startTime.getUTCHours() * 60 + booking.startTime.getUTCMinutes() : null)),
     endTime: minuteToHHMM(booking.endMinute ?? (booking.endTime ? booking.endTime.getUTCHours() * 60 + booking.endTime.getUTCMinutes() : null)),
-    employeeId: booking.userEmail ? employeesByEmail.get(normalizeEmail(booking.userEmail))?.id : undefined,
-    userDisplayName: booking.userEmail ? employeesByEmail.get(normalizeEmail(booking.userEmail))?.displayName : undefined
   }));
 
   res.status(200).json(enrichedBookings);
@@ -3666,10 +3764,31 @@ app.patch('/admin/bookings/:id', requireAdmin, async (req, res) => {
       slot: nextWindow.mode === 'day' ? (nextWindow.daySlot === 'FULL' ? 'FULL_DAY' : nextWindow.daySlot === 'AM' ? 'MORNING' : 'AFTERNOON') : 'CUSTOM',
       startMinute: nextWindow.mode === 'time' ? nextWindow.startMinute : null,
       endMinute: nextWindow.mode === 'time' ? nextWindow.endMinute : null
-    }
+    },
+    include: { createdBy: { select: { id: true, displayName: true, email: true } } }
   });
 
-  res.status(200).json(updated);
+  const employee = updated.userEmail ? (await getActiveEmployeesByEmail([updated.userEmail])).get(normalizeEmail(updated.userEmail)) : undefined;
+  const appUser = updated.userEmail ? await prisma.user.findUnique({ where: { email: normalizeEmail(updated.userEmail) }, select: { id: true, displayName: true, email: true } }) : null;
+  const fallbackUser = updated.userEmail
+    ? {
+      id: appUser?.id ?? updated.createdByUserId,
+      displayName: employee?.displayName ?? appUser?.displayName ?? updated.userEmail,
+      email: updated.userEmail
+    }
+    : null;
+  const createdBy = resolveCreatedBySummary({
+    createdBy: updated.createdBy,
+    createdByUserId: updated.createdByUserId,
+    fallbackUser
+  });
+
+  res.status(200).json({
+    ...updated,
+    createdBy,
+    createdByUserId: createdBy.id,
+    user: updated.bookedFor === 'SELF' && fallbackUser ? fallbackUser : null
+  });
 });
 
 app.get('/admin/recurring-bookings', requireAdmin, async (req, res) => {
@@ -3772,6 +3891,7 @@ app.patch('/admin/recurring-bookings/:id', requireAdmin, async (req, res) => {
 
 const start = async () => {
   await ensureBreakglassAdmin();
+  await backfillLegacyBookingCreators();
   app.listen(port, '0.0.0.0', () => {
     console.log(`${APP_TITLE} API listening on ${port}`);
   });
