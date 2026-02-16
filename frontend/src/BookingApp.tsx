@@ -14,10 +14,31 @@ import { useToast } from './components/toast';
 import { normalizeDaySlotBookings } from './daySlotBookings';
 import { RESOURCE_KIND_OPTIONS, resourceKindLabel, type ResourceKind } from './resourceKinds';
 import { ROOM_WINDOW_END, ROOM_WINDOW_START, ROOM_WINDOW_TOTAL_MINUTES, clampInterval, formatMinutes, intervalsToSegments, invertIntervals, mergeIntervals, toMinutes } from './lib/bookingWindows';
+import { getLastMutation, isDebugMode, setLastMutation } from './debug/runtimeDebug';
 
 type Floorplan = { id: string; name: string; imageUrl: string; isDefault?: boolean; defaultResourceKind?: ResourceKind };
 type RawFloorplan = Floorplan & { image?: string; imageURL?: string };
 type FloorplanResource = { id: string; floorplanId: string; kind?: ResourceKind };
+type BookingActor = { id: string; displayName?: string | null; name?: string | null; email?: string | null };
+type OccupancyBookingData = {
+  id?: string;
+  employeeId?: string;
+  userId?: string | null;
+  userEmail?: string | null;
+  userDisplayName?: string;
+  userFirstName?: string;
+  userPhotoUrl?: string;
+  bookedFor?: 'SELF' | 'GUEST';
+  guestName?: string | null;
+  createdBy?: BookingActor;
+  createdByUserId?: string;
+  type?: 'single' | 'recurring';
+  daySlot?: 'AM' | 'PM' | 'FULL';
+  slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM';
+  startTime?: string;
+  endTime?: string;
+  isCurrentUser?: boolean;
+};
 type OccupancyDesk = {
   id: string;
   name: string;
@@ -27,8 +48,8 @@ type OccupancyDesk = {
   x: number | null;
   y: number | null;
   status: 'free' | 'booked';
-  booking: { id?: string; employeeId?: string; userEmail: string; userDisplayName?: string; userFirstName?: string; userPhotoUrl?: string; type?: 'single' | 'recurring'; daySlot?: 'AM' | 'PM' | 'FULL'; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string; isCurrentUser?: boolean } | null;
-  bookings?: Array<{ id?: string; employeeId?: string; userEmail: string; userDisplayName?: string; userFirstName?: string; userPhotoUrl?: string; type?: 'single' | 'recurring'; daySlot?: 'AM' | 'PM' | 'FULL'; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string; isCurrentUser?: boolean }>;
+  booking: OccupancyBookingData | null;
+  bookings?: OccupancyBookingData[];
   isCurrentUsersDesk?: boolean;
   isHighlighted?: boolean;
 };
@@ -68,7 +89,7 @@ type DeskPopupState = { deskId: string; anchorRect: DOMRect; openedAt: number };
 type CancelConfirmContext = DeskPopupState & { bookingIds: string[]; bookingLabel: string; isRecurring: boolean; keepPopoverOpen: boolean };
 type OccupancyBooking = NonNullable<OccupancyDesk['booking']>;
 type NormalizedOccupancyBooking = ReturnType<typeof normalizeDaySlotBookings<OccupancyBooking>>[number];
-type RoomAvailabilityBooking = { id: string; startTime: string | null; endTime: string | null; user: { email: string; name?: string } };
+type RoomAvailabilityBooking = { id: string; startTime: string | null; endTime: string | null; bookedFor?: 'SELF' | 'GUEST'; guestName?: string | null; userId?: string | null; user: { email?: string | null; name?: string | null; displayName?: string | null } | null; createdBy?: BookingActor; createdByUserId?: string; };
 type RoomAvailabilityResponse = {
   resource: { id: string; name: string; type: string };
   date: string;
@@ -80,8 +101,12 @@ type RoomAvailabilityResponse = {
     end: string | null;
     startTime: string | null;
     endTime: string | null;
-    createdBy: string;
-    user: { email: string; name: string };
+    bookedFor?: 'SELF' | 'GUEST';
+    guestName?: string | null;
+    userId?: string | null;
+    createdBy: BookingActor;
+    createdByUserId?: string;
+    user: { email?: string | null; name?: string | null; displayName?: string | null } | null;
   }>;
   freeWindows: Array<{ startTime: string | null; endTime: string | null; label: string }>;
 };
@@ -230,6 +255,29 @@ const getFirstName = ({ firstName, displayName, email }: { firstName?: string; d
   return 'Unbekannt';
 };
 
+const getBookingDisplayName = (booking: { bookedFor?: 'SELF' | 'GUEST'; guestName?: string | null; user?: { displayName?: string | null; name?: string | null; email?: string | null } | null; userDisplayName?: string; userEmail?: string | null }): string => {
+  if (booking.bookedFor === 'GUEST') {
+    return `Gast: ${booking.guestName?.trim() || 'Unbekannt'}`;
+  }
+
+  return booking.user?.displayName
+    ?? booking.user?.name
+    ?? booking.userDisplayName
+    ?? booking.userEmail
+    ?? booking.user?.email
+    ?? 'Unbekannt';
+};
+
+const getBookingCreatorName = (booking: { createdBy?: BookingActor }): string => {
+  return booking.createdBy?.displayName ?? booking.createdBy?.name ?? 'Unbekannt';
+};
+
+const isMine = (booking: { bookedFor?: 'SELF' | 'GUEST'; userId?: string | null; createdByUserId?: string }, me?: AuthUser | null): boolean => {
+  if (!me) return false;
+  if (booking.bookedFor === 'SELF' && booking.userId && booking.userId === me.id) return true;
+  return Boolean(booking.createdByUserId && booking.createdByUserId === me.id);
+};
+
 const formatDate = (dateString: string): string => new Date(`${dateString}T00:00:00.000Z`).toLocaleDateString('de-DE');
 const bookingBelongsToDay = (booking: { startTime?: string }, selectedDateValue: string): boolean => {
   if (!booking.startTime) return true;
@@ -360,15 +408,15 @@ const mapBookingsForDay = (desks: OccupancyDesk[]): OccupantForDay[] => {
 
   desks.forEach((desk) => {
     for (const booking of normalizeDeskBookings(desk)) {
-      const fullName = booking.userDisplayName ?? booking.userEmail ?? 'Unbekannt';
+      const fullName = getBookingDisplayName(booking);
 
       const occupant: OccupantForDay = {
         deskId: desk.id,
         deskLabel: desk.name,
         deskKindLabel: resourceKindLabel(desk.kind),
-        userId: booking.id ?? booking.employeeId ?? booking.userEmail ?? `${desk.id}-occupant`,
+        userId: booking.userId ?? booking.id ?? booking.employeeId ?? booking.userEmail ?? `${desk.id}-occupant`,
         name: fullName,
-        firstName: getFirstName({ firstName: booking.userFirstName, displayName: fullName, email: booking.userEmail }),
+        firstName: getFirstName({ firstName: booking.userFirstName, displayName: fullName, email: booking.userEmail ?? undefined }),
         email: booking.userEmail ?? '',
         employeeId: booking.employeeId,
         photoUrl: booking.userPhotoUrl
@@ -398,23 +446,28 @@ const enrichDeskBookings = ({
   currentUserId?: string;
 }): OccupancyDesk[] => desks.map((desk) => {
   const normalizedBookings = normalizeDeskBookings(desk).map((booking) => {
-    const employee = booking.employeeId ? employeesById.get(booking.employeeId) : employeesByEmail.get(booking.userEmail.toLowerCase());
-    const fallbackPhotoUrl = currentUserEmail && booking.userEmail.toLowerCase() === currentUserEmail.toLowerCase()
+    const normalizedEmail = booking.userEmail?.toLowerCase();
+    const employee = booking.employeeId
+      ? employeesById.get(booking.employeeId)
+      : normalizedEmail
+        ? employeesByEmail.get(normalizedEmail)
+        : undefined;
+    const fallbackPhotoUrl = currentUserEmail && normalizedEmail && normalizedEmail === currentUserEmail.toLowerCase()
       ? resolveApiUrl(`/user/me/photo?v=${encodeURIComponent(currentUserEmail)}`)
       : undefined;
     const employeePhotoUrl = resolveApiUrl(employee?.photoUrl);
     const bookingPhotoUrl = resolveApiUrl(booking.userPhotoUrl);
-    const bookingEmail = booking.userEmail.toLowerCase();
-    const isMineByEmail = Boolean(currentUserEmail && bookingEmail === currentUserEmail.toLowerCase());
-    const isMineByEmployeeId = Boolean(currentUserId && booking.employeeId && booking.employeeId === currentUserId);
+    const isMineByEmail = Boolean(currentUserEmail && normalizedEmail && normalizedEmail === currentUserEmail.toLowerCase());
+    const isMineByUserId = Boolean(currentUserId && booking.userId && booking.userId === currentUserId && booking.bookedFor === 'SELF');
+    const isMineByCreator = Boolean(currentUserId && booking.createdByUserId && booking.createdByUserId === currentUserId);
 
     return {
       ...booking,
       employeeId: booking.employeeId ?? employee?.id,
-      userFirstName: booking.userFirstName ?? employee?.firstName ?? getFirstName({ displayName: booking.userDisplayName ?? employee?.displayName, email: booking.userEmail }),
+      userFirstName: booking.userFirstName ?? employee?.firstName ?? getFirstName({ displayName: booking.userDisplayName ?? employee?.displayName, email: booking.userEmail ?? undefined }),
       userDisplayName: booking.userDisplayName ?? employee?.displayName,
       userPhotoUrl: bookingPhotoUrl ?? employeePhotoUrl ?? fallbackPhotoUrl,
-      isCurrentUser: isMineByEmail || isMineByEmployeeId
+      isCurrentUser: isMineByEmail || isMineByUserId || isMineByCreator
     };
   });
 
@@ -570,6 +623,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     httpStatus: null,
     errorMessage: ''
   });
+  const [lastMutationDebug, setLastMutationDebug] = useState(() => getLastMutation());
   const [calendarBookings, setCalendarBookings] = useState<CalendarBooking[]>([]);
   const [floorplanResources, setFloorplanResources] = useState<FloorplanResource[]>([]);
   const [bookedCalendarDays, setBookedCalendarDays] = useState<string[]>([]);
@@ -630,10 +684,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   }, [refreshDeskPopupAnchorRect, registerToastDeskAnchor]);
 
   const selectedFloorplan = useMemo(() => floorplans.find((f) => f.id === selectedFloorplanId) ?? null, [floorplans, selectedFloorplanId]);
-  const showRoomDebugInfo = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    return new URLSearchParams(window.location.search).get('debug') === '1';
-  }, []);
+  const showRoomDebugInfo = useMemo(() => isDebugMode(), []);
   const floorplanImageSrc = useMemo(() => {
     if (!selectedFloorplan?.imageUrl) return '';
     const resolvedSrc = resolveApiUrl(selectedFloorplan.imageUrl) ?? selectedFloorplan.imageUrl;
@@ -1017,6 +1068,11 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           id: booking.id,
           startTime: booking.startTime,
           endTime: booking.endTime,
+          bookedFor: booking.bookedFor,
+          guestName: booking.guestName,
+          userId: booking.userId,
+          createdBy: booking.createdBy,
+          createdByUserId: booking.createdByUserId,
           user: booking.user
         }))
         .sort((left, right) => (bookingTimeToMinutes(left.startTime) ?? 0) - (bookingTimeToMinutes(right.startTime) ?? 0));
@@ -1024,10 +1080,17 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
     return popupDeskBookings
       .map((booking) => ({
-        id: booking.id ?? `${booking.userEmail}-${booking.startTime}-${booking.endTime}`,
+        id: booking.id ?? `${booking.userEmail ?? 'unknown'}-${booking.startTime}-${booking.endTime}`,
         startTime: booking.startTime ?? null,
         endTime: booking.endTime ?? null,
-        user: { email: booking.userEmail, name: booking.userDisplayName }
+        bookedFor: booking.bookedFor,
+        guestName: booking.guestName,
+        userId: booking.userId,
+        createdBy: booking.createdBy,
+        createdByUserId: booking.createdByUserId,
+        user: booking.bookedFor === 'GUEST'
+          ? null
+          : { email: booking.userEmail ?? undefined, name: booking.userDisplayName }
       }))
       .sort((left, right) => (bookingTimeToMinutes(left.startTime) ?? 0) - (bookingTimeToMinutes(right.startTime) ?? 0));
   }, [popupDesk, popupDeskBookings, roomAvailability, selectedDate]);
@@ -1049,14 +1112,15 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         if (start === null || end === null || end <= start) return [];
         const clamped = clampInterval({ startMin: start, endMin: end }, ROOM_WINDOW_START_MINUTES, ROOM_WINDOW_END_MINUTES);
         if (!clamped) return [];
-        const bookingEmail = booking.user.email.toLowerCase();
-        const isCurrentUser = Boolean(currentUserEmail && bookingEmail === currentUserEmail.toLowerCase());
+        const bookingEmail = booking.user?.email?.toLowerCase();
+        const mine = isMine(booking, currentUser);
+        const isCurrentUser = mine || Boolean(currentUserEmail && bookingEmail && bookingEmail === currentUserEmail.toLowerCase());
         return [{
           id: booking.id,
           start: clamped.startMin,
           end: clamped.endMin,
           label: `${formatMinutes(clamped.startMin)} – ${formatMinutes(clamped.endMin)}`,
-          person: booking.user.name ?? booking.user.email,
+          person: getBookingDisplayName(booking),
           bookingId: booking.id,
           isCurrentUser,
           isRecurring: false
@@ -1065,7 +1129,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       .sort((a, b) => a.start - b.start);
 
     return rendered;
-  }, [popupRoomBookingsForSelectedDay, currentUserEmail]);
+  }, [popupRoomBookingsForSelectedDay, currentUser, currentUserEmail]);
   const popupRoomFreeSlotChips = useMemo(() => popupRoomFreeIntervals
     .filter((interval) => interval.endMin - interval.startMin >= 30)
     .map((interval) => ({
@@ -1688,6 +1752,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
     const requestId = createMutationRequestId();
     const isRoomCreate = isRoomResource(popupDesk) && payload.type === 'single';
+    const mutationName = payload.type === 'single' && payload.bookedFor === 'GUEST' ? 'BOOKING_CREATE_GUEST' : 'BOOKING_CREATE_SELF';
 
     setDialogErrorMessage('');
     setBookingDialogState('SUBMITTING');
@@ -1723,7 +1788,25 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       } else {
         await submitPopupBooking(popupDesk.id, payload, false);
       }
-      await reloadBookings(isRoomCreate ? { requestId, roomId: popupDesk.id, date: payload.date } : undefined);
+      const refreshed = await reloadBookings(isRoomCreate ? { requestId, roomId: popupDesk.id, date: payload.date } : undefined);
+      if (!refreshed) {
+        const failedMutation = setLastMutation({
+          mutation: mutationName,
+          status: 'error',
+          errorMessage: 'Refetch fehlgeschlagen',
+          responseSnippet: 'refetch_failed'
+        });
+        setLastMutationDebug(failedMutation);
+        setBookingDialogState('BOOKING_OPEN');
+        setDialogErrorMessage('Buchung gespeichert, aber Aktualisierung fehlgeschlagen. Bitte erneut laden.');
+        return;
+      }
+      const successfulMutation = setLastMutation({
+        mutation: mutationName,
+        status: 'success',
+        responseSnippet: toBodySnippet({ deskId: popupDesk.id, date: payload.type === 'single' ? payload.date : selectedDate, bookedFor: payload.type === 'single' ? payload.bookedFor : 'SELF' })
+      });
+      setLastMutationDebug(successfulMutation);
       setBookingVersion((value) => value + 1);
       closeBookingFlow();
     } catch (error) {
@@ -1733,6 +1816,13 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           err: error instanceof Error ? error.message : toBodySnippet(error)
         });
       }
+      const failedMutation = setLastMutation({
+        mutation: mutationName,
+        status: 'error',
+        errorMessage: error instanceof Error ? error.message : 'Buchung fehlgeschlagen',
+        responseSnippet: toBodySnippet(error)
+      });
+      setLastMutationDebug(failedMutation);
       if (error instanceof ApiError && error.code === 'BACKEND_UNREACHABLE') {
         setBackendDown(true);
         setBookingDialogState('BOOKING_OPEN');
@@ -2384,8 +2474,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                   ? <p className="muted">Deine Buchung: {bookingSlotLabel(popupMySelectedBooking)}</p>
                   : !isRoomResource(popupDesk) && <p className="muted">Status: {deskAvailabilityLabel(popupDeskAvailability)}</p>}
                 {popupDeskBookings.map((booking) => (
-                  <p key={booking.id ?? `${booking.userEmail}-${bookingSlotLabel(booking)}`} className="muted">
-                    {bookingSlotLabel(booking)}: {booking.userDisplayName ?? booking.userEmail}
+                  <p key={booking.id ?? `${booking.userEmail ?? 'unknown'}-${bookingSlotLabel(booking)}`} className="muted">
+                    {bookingSlotLabel(booking)}: {getBookingDisplayName(booking)}{booking.bookedFor === 'GUEST' ? ` · gebucht von ${getBookingCreatorName(booking)}` : ''}
                   </p>
                 ))}
                 {showRoomDebugInfo && (
@@ -2499,6 +2589,13 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         document.body
       )}
 
+
+      {showRoomDebugInfo && (
+        <p className="api-base">
+          Last action: {lastMutationDebug ? `${lastMutationDebug.mutation} · ${lastMutationDebug.status}` : '—'}
+          {lastMutationDebug?.responseSnippet ? ` · ${lastMutationDebug.responseSnippet}` : ''}
+        </p>
+      )}
 
       <p className="api-base">{APP_TITLE} · v{APP_VERSION}</p>
     </main>
