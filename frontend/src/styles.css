@@ -492,3 +492,16 @@ tr{cursor:pointer}.row-selected{background:hsl(var(--muted))}
 }
 
 .subtle-divider{border:0;border-top:1px solid hsl(var(--border));margin:4px 0}
+
+.error-debug-pre {
+  margin: 0;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid hsl(var(--border));
+  border-radius: 8px;
+  padding: 8px;
+  background: hsl(var(--surface));
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}

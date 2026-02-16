@@ -7,9 +7,14 @@ import { ROOM_WINDOW_END, ROOM_WINDOW_START, clampInterval, mergeIntervals, toMi
 type FloorplanBooking = {
   id?: string;
   employeeId?: string;
+  userId?: string | null;
   userDisplayName?: string;
-  userEmail: string;
+  userEmail?: string | null;
   userPhotoUrl?: string;
+  bookedFor?: 'SELF' | 'GUEST';
+  guestName?: string | null;
+  createdBy?: { id?: string; displayName?: string | null; name?: string | null };
+  createdByUserId?: string;
   daySlot?: 'AM' | 'PM' | 'FULL';
   slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM';
   startTime?: string;
@@ -85,7 +90,11 @@ const getResourceMarkerIcon = (kind?: string): string => {
   return '⌨';
 };
 
-const getBookingPersonLabel = (booking?: FloorplanBooking): string => booking?.userDisplayName ?? booking?.userEmail ?? 'Unbekannt';
+const getBookingPersonLabel = (booking?: FloorplanBooking): string => {
+  if (!booking) return 'Unbekannt';
+  if (booking.bookedFor === 'GUEST') return `Gast: ${booking.guestName?.trim() || 'Unbekannt'}`;
+  return booking.userDisplayName ?? booking.userEmail ?? 'Unbekannt';
+};
 
 const normalizeBookings = (desk: FloorplanDesk): FloorplanBooking[] => {
   const bookings = desk.bookings && desk.bookings.length > 0 ? desk.bookings : desk.booking ? [desk.booking] : [];
@@ -202,7 +211,7 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
           const shouldShowPulse = bookings.length === 0 && !isInteracting && !disablePulseAnimation;
           const isClickable = !(amBooking && pmBooking && !bookings.some((booking) => booking.isCurrentUser));
           const centerBooking = fullBooking ?? bookings[0];
-          const initials = getInitials(centerBooking?.userDisplayName, centerBooking?.userEmail);
+          const initials = getInitials(centerBooking?.userDisplayName, centerBooking?.userEmail ?? undefined);
           const hasPhoto = Boolean(centerBooking?.userPhotoUrl);
           const imgOk = hasPhoto && (imageStates[desk.id] ?? true);
 
@@ -319,7 +328,7 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
           <strong>{tooltipDesk.kind === 'RAUM' ? `Raum: ${getRoomName(tooltipDesk)}` : `${resourceKindLabel(tooltipDesk.kind)}: ${getDeskLabel(tooltipDesk)}`}</strong>
           {tooltipDesk.kind === 'RAUM' ? (
             normalizeBookings(tooltipDesk).map((booking) => (
-              <span key={booking.id ?? `${booking.userEmail}-${booking.startTime}`}>{`${booking.startTime ?? '--:--'}-${booking.endTime ?? '--:--'}: ${booking.userDisplayName ?? booking.userEmail}`}</span>
+              <span key={booking.id ?? `${booking.userEmail ?? 'unknown'}-${booking.startTime}`}>{`${booking.startTime ?? '--:--'}-${booking.endTime ?? '--:--'}: ${getBookingPersonLabel(booking)}${booking.bookedFor === 'GUEST' ? ` · gebucht von ${booking.createdBy?.displayName ?? booking.createdBy?.name ?? 'Unbekannt'}` : ''}`}</span>
             ))
           ) : (
             (() => {

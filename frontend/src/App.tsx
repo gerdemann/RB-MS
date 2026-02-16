@@ -4,6 +4,7 @@ import { BookingApp } from './BookingApp';
 import { AdminRouter } from './admin/AdminRouter';
 import { useAuth } from './auth/AuthProvider';
 import { APP_TITLE } from './config';
+import { setLastRoute } from './debug/runtimeDebug';
 import microsoftLogo from './assets/microsoft.svg';
 
 type Route = '/' | '/admin' | '/login' | '/breakglass' | string;
@@ -121,6 +122,10 @@ export function App() {
     window.addEventListener('hashchange', handler);
     return () => window.removeEventListener('hashchange', handler);
   }, []);
+
+  useEffect(() => {
+    setLastRoute(`${window.location.pathname}${window.location.search}${window.location.hash}`);
+  }, [path]);
 
   useEffect(() => {
     document.title = APP_TITLE;

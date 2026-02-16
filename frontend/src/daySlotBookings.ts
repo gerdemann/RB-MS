@@ -3,7 +3,7 @@ export type DaySlotValue = 'AM' | 'PM' | 'FULL';
 type DaySlotBookingShape = {
   id?: string;
   employeeId?: string;
-  userEmail?: string;
+  userEmail?: string | null;
   daySlot?: 'AM' | 'PM' | 'FULL';
   slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM';
 };
