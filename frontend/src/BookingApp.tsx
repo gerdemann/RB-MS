@@ -12,7 +12,7 @@ import { APP_TITLE, COMPANY_LOGO_URL } from './config';
 import type { AuthUser } from './auth/AuthProvider';
 import { useToast } from './components/toast';
 import { normalizeDaySlotBookings } from './daySlotBookings';
-import { resourceKindLabel, type ResourceKind } from './resourceKinds';
+import { RESOURCE_KIND_OPTIONS, resourceKindLabel, type ResourceKind } from './resourceKinds';
 
 type Floorplan = { id: string; name: string; imageUrl: string; isDefault?: boolean; defaultResourceKind?: ResourceKind };
 type FloorplanResource = { id: string; floorplanId: string; kind?: ResourceKind };
@@ -82,6 +82,8 @@ type PopupCoordinates = { left: number; top: number; placement: PopupPlacement }
 type TimeInterval = { start: number; end: number };
 type CalendarBooking = { date: string; deskId: string; daySlot?: 'AM' | 'PM' | 'FULL' };
 type DayAvailabilityTone = 'many-free' | 'few-free' | 'none-free';
+type OverviewTab = 'PRESENCE' | 'ROOMS' | 'MY_BOOKINGS';
+type QuickBookSlot = { id: string; label: string; payload: BookingSubmitPayload };
 
 const POPUP_OFFSET = 12;
 const POPUP_PADDING = 8;
@@ -509,6 +511,9 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const [todayOccupancy, setTodayOccupancy] = useState<OccupancyResponse | null>(null);
   const [employees, setEmployees] = useState<BookingEmployee[]>([]);
   const [selectedEmployeeEmail, setSelectedEmployeeEmail] = useState('');
+  const [selectedResourceKindFilter, setSelectedResourceKindFilter] = useState<'ALL' | ResourceKind>('ALL');
+  const [overviewTab, setOverviewTab] = useState<OverviewTab>('PRESENCE');
+  const [isTodayPanelExpanded, setIsTodayPanelExpanded] = useState(false);
 
   const [selectedDeskId, setSelectedDeskId] = useState('');
   const [hoveredDeskId, setHoveredDeskId] = useState('');
@@ -589,9 +594,26 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     currentUserEmail,
     currentUserId: currentUser?.id
   }), [todayOccupancy?.desks, employeesByEmail, employeesById, currentUserEmail, currentUser?.id]);
-  const filteredDesks = useMemo(() => desks.map((desk) => ({ ...desk, isHighlighted: desk.id === highlightedDeskId })), [desks, highlightedDeskId]);
-  const bookingsForSelectedDate = useMemo<OccupantForDay[]>(() => mapBookingsForDay(desks), [desks]);
+  const selectableResourceKinds = useMemo(() => {
+    const availableKinds = new Set<ResourceKind>();
+    for (const desk of desks) {
+      availableKinds.add((desk.kind ?? 'SONSTIGES') as ResourceKind);
+    }
+    return RESOURCE_KIND_OPTIONS.filter((option) => availableKinds.has(option.value));
+  }, [desks]);
+  const desksBySelectedResourceKind = useMemo(() => {
+    if (selectedResourceKindFilter === 'ALL') return desks;
+    return desks.filter((desk) => (desk.kind ?? 'SONSTIGES') === selectedResourceKindFilter);
+  }, [desks, selectedResourceKindFilter]);
+  const filteredDesks = useMemo(() => desksBySelectedResourceKind.map((desk) => ({ ...desk, isHighlighted: desk.id === highlightedDeskId })), [desksBySelectedResourceKind, highlightedDeskId]);
+  const bookingsForSelectedDate = useMemo<OccupantForDay[]>(() => mapBookingsForDay(desksBySelectedResourceKind), [desksBySelectedResourceKind]);
   const bookingsForToday = useMemo<OccupantForDay[]>(() => mapBookingsForDay(desksToday), [desksToday]);
+  const roomsForSelectedDate = useMemo(() => desksBySelectedResourceKind
+    .filter((desk) => isRoomResource(desk))
+    .map((room) => ({ room, bookings: normalizeDeskBookings(room) })), [desksBySelectedResourceKind]);
+  const myBookingsForSelectedDate = useMemo(() => desksBySelectedResourceKind.flatMap((desk) => normalizeDeskBookings(desk)
+    .filter((booking) => booking.isCurrentUser)
+    .map((booking) => ({ desk, booking }))), [desksBySelectedResourceKind]);
   const popupDesk = useMemo(() => (deskPopup ? desks.find((desk) => desk.id === deskPopup.deskId) ?? null : null), [desks, deskPopup]);
   const popupDeskAvailability = useMemo(() => getDeskSlotAvailability(popupDesk), [popupDesk]);
   const popupDeskBookings = useMemo(() => (popupDesk ? normalizeDeskBookings(popupDesk) : []), [popupDesk]);
@@ -680,6 +702,28 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const popupOwnBookingIsRecurring = useMemo(() => popupDeskBookings.some((booking) => booking.isCurrentUser && booking.type === 'recurring'), [popupDeskBookings]);
   const cancelConfirmDesk = useMemo(() => (cancelConfirmContext ? desks.find((desk) => desk.id === cancelConfirmContext.deskId) ?? null : null), [desks, cancelConfirmContext]);
   const cancelConfirmBookingLabel = cancelConfirmContext?.bookingLabel ?? bookingSlotLabel(cancelConfirmDesk?.booking);
+  const popupQuickBookSlots = useMemo<QuickBookSlot[]>(() => {
+    if (!popupDesk || !canBookDesk(popupDesk)) return [];
+    if (isRoomResource(popupDesk)) {
+      return popupRoomFreeSlotChips.map((slot) => ({
+        id: `${slot.startTime}-${slot.endTime}`,
+        label: slot.label,
+        payload: { type: 'single', date: selectedDate, startTime: slot.startTime, endTime: slot.endTime }
+      }));
+    }
+
+    const availability = getDeskSlotAvailability(popupDesk);
+    if (availability === 'FREE') {
+      return [
+        { id: 'FULL_DAY', label: 'Ganztag', payload: { type: 'single', date: selectedDate, slot: 'FULL_DAY' } },
+        { id: 'MORNING', label: 'Vormittag', payload: { type: 'single', date: selectedDate, slot: 'MORNING' } },
+        { id: 'AFTERNOON', label: 'Nachmittag', payload: { type: 'single', date: selectedDate, slot: 'AFTERNOON' } }
+      ];
+    }
+    if (availability === 'AM_BOOKED') return [{ id: 'AFTERNOON', label: 'Nachmittag', payload: { type: 'single', date: selectedDate, slot: 'AFTERNOON' } }];
+    if (availability === 'PM_BOOKED') return [{ id: 'MORNING', label: 'Vormittag', payload: { type: 'single', date: selectedDate, slot: 'MORNING' } }];
+    return [];
+  }, [popupDesk, popupRoomFreeSlotChips, selectedDate]);
   const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
   const calendarRange = useMemo(() => ({
     from: toDateKey(calendarDays[0]),
@@ -1061,6 +1105,10 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     setCancelDialogError('');
   };
 
+  const handleQuickBook = async (slot: QuickBookSlot) => {
+    await handleBookingSubmit(slot.payload);
+  };
+
   const openCancelConfirm = () => {
     if (!deskPopup || !popupDesk || popupDeskState !== 'MINE') return;
     const ownBooking = normalizeDeskBookings(popupDesk).find((booking) => booking.isCurrentUser);
@@ -1373,41 +1421,49 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     await loadInitial();
   };
 
-  const calendarPanel = (
-    <section className="card compact-card">
-        <div className="calendar-header">
-          <button className="btn btn-ghost" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() - 1, 1)))}>‹</button>
-          <strong>{monthLabel(visibleMonth)}</strong>
-          <button className="btn btn-ghost" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() + 1, 1)))}>›</button>
-        </div>
-        <div className="calendar-grid" role="grid" aria-label="Monatsansicht">
-          {weekdays.map((weekday) => <span key={weekday} className="weekday-label">{weekday}</span>)}
-          {calendarDays.map((day) => {
-            const dayKey = toDateKey(day);
-            const inVisibleMonth = day.getUTCMonth() === visibleMonth.getUTCMonth();
-            const isSelected = dayKey === selectedDate;
-            const isToday = dayKey === today;
-            const hasBookingsForDay = bookedCalendarDaysSet.has(dayKey);
-            const availabilityTone = dayAvailabilityByDate.get(dayKey);
-            return (
-              <button key={dayKey} className={`day-btn ${inVisibleMonth ? '' : 'outside'} ${isSelected ? 'selected' : ''} ${isToday ? 'today' : ''} ${!isSelected && hasBookingsForDay ? 'has-bookings' : ''} ${!isSelected && availabilityTone ? `availability-${availabilityTone}` : ''}`} onClick={() => selectDay(day)}>
-                {day.getUTCDate()}
-              </button>
-            );
-          })}
-        </div>
-      </section>
-  );
-
-  const legendPanel = (
+  const dateAndViewPanel = (
     <section className="card compact-card stack-sm">
-        <h3 className="section-title">Legende</h3>
-        <div className="legend">
-          <span><i className="dot free" /> Grün = frei</span>
-          <span><i className="dot booked" /> Rot = belegt</span>
-          <span><i className="dot selected" /> Blau = dein Platz</span>
-        </div>
-      </section>
+      <h3 className="section-title">Datum &amp; Ansicht</h3>
+      <label className="stack-xs">
+        <span className="field-label">Standort</span>
+        <select value={selectedFloorplanId} onChange={(event) => setSelectedFloorplanId(event.target.value)}>
+          {floorplans.map((floorplan) => <option key={floorplan.id} value={floorplan.id}>{floorplan.name}</option>)}
+        </select>
+      </label>
+      <div className="calendar-header">
+        <button className="btn btn-ghost" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() - 1, 1)))}>‹</button>
+        <strong>{monthLabel(visibleMonth)}</strong>
+        <button className="btn btn-ghost" onClick={() => setVisibleMonth((prev) => new Date(Date.UTC(prev.getUTCFullYear(), prev.getUTCMonth() + 1, 1)))}>›</button>
+      </div>
+      <div className="calendar-grid" role="grid" aria-label="Monatsansicht">
+        {weekdays.map((weekday) => <span key={weekday} className="weekday-label">{weekday}</span>)}
+        {calendarDays.map((day) => {
+          const dayKey = toDateKey(day);
+          const inVisibleMonth = day.getUTCMonth() === visibleMonth.getUTCMonth();
+          const isSelected = dayKey === selectedDate;
+          const isToday = dayKey === today;
+          const hasBookingsForDay = bookedCalendarDaysSet.has(dayKey);
+          const availabilityTone = dayAvailabilityByDate.get(dayKey);
+          return (
+            <button key={dayKey} className={`day-btn ${inVisibleMonth ? '' : 'outside'} ${isSelected ? 'selected' : ''} ${isToday ? 'today' : ''} ${!isSelected && hasBookingsForDay ? 'has-bookings' : ''} ${!isSelected && availabilityTone ? `availability-${availabilityTone}` : ''}`} onClick={() => selectDay(day)}>
+              {day.getUTCDate()}
+            </button>
+          );
+        })}
+      </div>
+      <label className="stack-xs">
+        <span className="field-label">Ressourcenart</span>
+        <select value={selectedResourceKindFilter} onChange={(event) => setSelectedResourceKindFilter(event.target.value as 'ALL' | ResourceKind)}>
+          <option value="ALL">Alle Ressourcen</option>
+          {selectableResourceKinds.map((kind) => <option key={kind.value} value={kind.value}>{kind.label}</option>)}
+        </select>
+      </label>
+      <div className="legend-chip-list" aria-label="Legende">
+        <span className="legend-chip"><i className="dot free" /> Frei</span>
+        <span className="legend-chip"><i className="dot booked" /> Belegt</span>
+        <span className="legend-chip"><i className="dot selected" /> Dein Platz</span>
+      </div>
+    </section>
   );
 
   const renderOccupancyList = (items: OccupantForDay[], sectionKey: 'today' | 'selected', title: string, emptyText: string) => {
@@ -1453,20 +1509,21 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const todayPanel = (
     <section className="card compact-card today-compact-panel">
       <div className="today-summary-header">
-        <strong>Heute im Büro</strong>
+        <strong>Heute im Büro ({bookingsForToday.length})</strong>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => setIsTodayPanelExpanded((value) => !value)}>{isTodayPanelExpanded ? 'Einklappen' : 'Ausklappen'}</button>
       </div>
       {bookingsForToday.length === 0 ? (
         <div className="empty-state compact-empty-state today-people-empty-state">
           <p>Heute noch niemand eingetragen.</p>
         </div>
       ) : (
-        <div className="today-people-grid" role="list" aria-label="Anwesende heute">
+        <div className="today-avatar-strip" role="list" aria-label="Anwesende heute">
           {bookingsForToday.map((person) => (
             <button
               key={`today-${person.userId}-${person.deskId}`}
               type="button"
               role="listitem"
-              className={`today-person-tile ${(hoveredDeskId === person.deskId || selectedDeskId === person.deskId) ? 'is-active' : ''} ${highlightedDeskId === person.deskId ? 'is-highlighted' : ''}`}
+              className={`today-avatar-item ${(hoveredDeskId === person.deskId || selectedDeskId === person.deskId) ? 'is-active' : ''} ${highlightedDeskId === person.deskId ? 'is-highlighted' : ''}`}
               onMouseEnter={() => {
                 setHoveredDeskId(person.deskId);
                 setHighlightedDeskId(person.deskId);
@@ -1483,25 +1540,190 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
               }}
               title={person.name}
             >
-              <Avatar displayName={person.name} email={person.email} photoUrl={person.photoUrl} size={50} />
-              <span>{person.firstName}</span>
+              <Avatar displayName={person.name} email={person.email} photoUrl={person.photoUrl} size={36} />
             </button>
+          ))}
+        </div>
+      )}
+      {isTodayPanelExpanded && bookingsForToday.length > 0 && renderOccupancyList(bookingsForToday, 'today', 'Heute im Büro', 'Niemand anwesend')}
+    </section>
+  );
+
+  const dayOverviewPanel = (
+    <section className="card compact-card stack-sm details-panel">
+      <h3>Tagesübersicht</h3>
+      <div className="tabs" role="tablist" aria-label="Tagesübersicht Tabs">
+        <button type="button" className={`tab-btn ${overviewTab === 'PRESENCE' ? 'active' : ''}`} onClick={() => setOverviewTab('PRESENCE')}>Anwesenheit</button>
+        <button type="button" className={`tab-btn ${overviewTab === 'ROOMS' ? 'active' : ''}`} onClick={() => setOverviewTab('ROOMS')}>Räume</button>
+        <button type="button" className={`tab-btn ${overviewTab === 'MY_BOOKINGS' ? 'active' : ''}`} onClick={() => setOverviewTab('MY_BOOKINGS')}>Meine Buchungen</button>
+      </div>
+
+      {overviewTab === 'PRESENCE' && renderOccupancyList(bookingsForSelectedDate, 'selected', 'Anwesenheit am ausgewählten Datum', 'Niemand anwesend')}
+
+      {overviewTab === 'ROOMS' && (
+        <div className="occupancy-list" role="list" aria-label="Raumübersicht">
+          {roomsForSelectedDate.length === 0 && <div className="empty-state compact-empty-state"><p>Keine Räume gefunden.</p></div>}
+          {roomsForSelectedDate.map(({ room, bookings }) => (
+            <div key={room.id} className="occupant-compact-card" role="listitem">
+              <div className="occupant-card-main">
+                <div className="occupant-card-text">
+                  <strong>{room.name}</strong>
+                  <p className="muted">{bookings.length === 0 ? 'Heute frei' : `${bookings.length} Buchung(en)`}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {overviewTab === 'MY_BOOKINGS' && (
+        <div className="occupancy-list" role="list" aria-label="Eigene Buchungen">
+          {myBookingsForSelectedDate.length === 0 && <div className="empty-state compact-empty-state"><p>Keine eigenen Buchungen am gewählten Tag.</p></div>}
+          {myBookingsForSelectedDate.map(({ desk, booking }) => (
+            <div key={`${desk.id}-${booking.id ?? bookingSlotLabel(booking)}`} className="occupant-compact-card" role="listitem">
+              <div className="occupant-card-main">
+                <div className="occupant-card-text">
+                  <strong>{resourceKindLabel(desk.kind)}: {desk.name}</strong>
+                  <p className="muted">{bookingSlotLabel(booking)}</p>
+                </div>
+              </div>
+            </div>
           ))}
         </div>
       )}
     </section>
   );
 
-  const detailPanel = (
-    <div className="stack">
-      <section className="card compact-card stack-sm details-panel">
-        <div className="stack-sm">
-          <h3>Anwesend am {formatDate(selectedDate)}</h3>
-          {renderOccupancyList(bookingsForSelectedDate, 'selected', 'Anwesenheit am ausgewählten Datum', 'Niemand anwesend')}
-        </div>
-      </section>
-    </div>
-  );
+  useEffect(() => {
+    if (backendDown) {
+      setCalendarBookings([]);
+      setBookedCalendarDays([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadCalendarBookings = async () => {
+      try {
+        const calendarBookings = await runWithAppLoading(() => get<CalendarBooking[]>(`/bookings?from=${calendarRange.from}&to=${calendarRange.to}`));
+        if (cancelled) return;
+        setCalendarBookings(calendarBookings);
+        setBookedCalendarDays(Array.from(new Set(calendarBookings.map((booking) => toBookingDateKey(booking.date)))));
+      } catch {
+        if (cancelled) return;
+        setCalendarBookings([]);
+        setBookedCalendarDays([]);
+      }
+    };
+
+    loadCalendarBookings();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backendDown, calendarRange.from, calendarRange.to]);
+
+  useEffect(() => {
+    availabilityCacheRef.current.clear();
+  }, [selectedFloorplanId, visibleMonth, bookingVersion, floorplanResources, selectedFloorplan?.defaultResourceKind]);
+
+  useEffect(() => {
+    if (!selectedFloorplanId || backendDown) {
+      setFloorplanResources([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadFloorplanResources = async () => {
+      try {
+        const resources = await runWithAppLoading(() => get<FloorplanResource[]>(`/floorplans/${selectedFloorplanId}/desks`));
+        if (cancelled) return;
+        setFloorplanResources(resources);
+      } catch {
+        if (cancelled) return;
+        setFloorplanResources([]);
+      }
+    };
+
+    loadFloorplanResources();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [backendDown, selectedFloorplanId]);
+
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimerRef.current) {
+        window.clearTimeout(highlightTimerRef.current);
+      }
+    };
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!deskPopup || !popupRef.current) {
+      setDeskPopupCoords(null);
+      return;
+    }
+
+    const popupRect = popupRef.current.getBoundingClientRect();
+    setDeskPopupCoords(calculatePopupCoordinates(deskPopup.anchorRect, popupRect));
+  }, [deskPopup, bookingDialogState, popupDeskState, dialogErrorMessage]);
+
+
+  useEffect(() => {
+    if (!deskPopup) return;
+
+    const frame = window.requestAnimationFrame(() => {
+      refreshDeskPopupAnchorRect(deskPopup.deskId);
+    });
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+    };
+  }, [bookingVersion, deskPopup, refreshDeskPopupAnchorRect]);
+
+  useEffect(() => {
+    if (!deskPopup) return;
+
+    const closePopup = () => {
+      closeBookingFlow();
+    };
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        closePopup();
+      }
+    };
+
+    const closeOnOutsideClick = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (popupRef.current?.contains(target)) return;
+      const anchorElement = deskAnchorElementsRef.current.get(deskPopup.deskId);
+      if (anchorElement?.contains(target)) return;
+      closePopup();
+    };
+
+    const closeOnViewportChange = () => closePopup();
+
+    window.addEventListener('keydown', closeOnEscape);
+    window.addEventListener('mousedown', closeOnOutsideClick, true);
+    window.addEventListener('scroll', closeOnViewportChange, true);
+    window.addEventListener('wheel', closeOnViewportChange, { passive: true });
+    window.addEventListener('resize', closeOnViewportChange);
+
+    return () => {
+      window.removeEventListener('keydown', closeOnEscape);
+      window.removeEventListener('mousedown', closeOnOutsideClick, true);
+      window.removeEventListener('scroll', closeOnViewportChange, true);
+      window.removeEventListener('wheel', closeOnViewportChange);
+      window.removeEventListener('resize', closeOnViewportChange);
+    };
+  }, [deskPopup]);
+
 
   if (backendDown) {
     return (
@@ -1526,12 +1748,6 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         <div className="header-left">
           {COMPANY_LOGO_URL ? <img className="brand-logo" src={COMPANY_LOGO_URL} alt={`${APP_TITLE} Logo`} /> : <span className="brand-mark" aria-hidden="true">A</span>}
           <h1>{APP_TITLE}</h1>
-          <label className="field-inline">
-            <span>Standort</span>
-            <select value={selectedFloorplanId} onChange={(event) => setSelectedFloorplanId(event.target.value)}>
-            {floorplans.map((floorplan) => <option key={floorplan.id} value={floorplan.id}>{floorplan.name}</option>)}
-            </select>
-          </label>
         </div>
         <div className="header-right">
           <UserMenu user={currentUser} onLogout={onLogout} onOpenAdmin={onOpenAdmin} showAdminAction={canOpenAdmin} />
@@ -1543,8 +1759,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
       <section className="layout-grid">
         <aside className="left-col stack-sm">
-          {isBootstrapping ? <div className="card skeleton h-480" /> : calendarPanel}
-          {isBootstrapping ? <div className="card skeleton h-120" /> : legendPanel}
+          {isBootstrapping ? <div className="card skeleton h-480" /> : dateAndViewPanel}
         </aside>
         <section className="center-col">
           <article className="card canvas-card">
@@ -1583,7 +1798,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           </article>
         </section>
 
-        <aside className="right-col">{isBootstrapping ? <div className="card skeleton h-480" /> : detailPanel}</aside>
+        <aside className="right-col">{isBootstrapping ? <div className="card skeleton h-480" /> : dayOverviewPanel}</aside>
       </section>
 
       {deskPopup && popupDesk && popupDeskState && cancelFlowState !== 'CANCEL_CONFIRM_OPEN' && createPortal(
@@ -1599,40 +1814,20 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
               <div className="desk-popup-header">
                 <div className="stack-xxs">
                   <h3>{resourceKindLabel(popupDesk.kind)}: {popupDesk.name}</h3>
-                  <p className="muted">Buchung anlegen{!isRoomResource(popupDesk) ? ` · ${deskAvailabilityLabel(popupDeskAvailability)}` : ''}</p>
+                  <p className="muted">Quick-Book · Heute freie Zeitfenster</p>
                 </div>
                 <button type="button" className="btn btn-ghost desk-popup-close" aria-label="Popover schließen" onClick={closeBookingFlow}>✕</button>
               </div>
-              <BookingForm
-                values={bookingFormValues}
-                onChange={setBookingFormValues}
-                onCancel={closeBookingFlow}
-                onSubmit={handleBookingSubmit}
-                isSubmitting={bookingDialogState === 'SUBMITTING'}
-                disabled={bookingDialogState === 'SUBMITTING'}
-                errorMessage={dialogErrorMessage}
-                allowRecurring={popupDesk.effectiveAllowSeries !== false}
-                resourceKind={popupDesk.kind}
-                roomSchedule={isRoomResource(popupDesk)
-                  ? {
-                    bookings: popupRoomBookingsList.map((booking) => ({
-                      id: booking.id,
-                      label: booking.label,
-                      person: booking.person,
-                      isCurrentUser: booking.isCurrentUser,
-                      canCancel: booking.isCurrentUser && Boolean(booking.bookingId)
-                    })),
-                    freeSlots: popupRoomFreeSlotChips,
-                    isFullyBooked: popupRoomFreeSlotChips.length === 0,
-                    conflictMessage: roomBookingConflict,
-                    debugInfo: showRoomDebugInfo ? `bookings loaded: ${popupRoomBookingsList.length} · date: ${selectedDate} · room: ${popupDesk.name}` : undefined,
-                    onSelectFreeSlot: (startTime, endTime) => {
-                      setBookingFormValues((current) => ({ ...current, startTime, endTime }));
-                    },
-                    onBookingClick: handleRoomBookingCancel
-                  }
-                  : undefined}
-              />
+              {popupQuickBookSlots.length > 0 ? (
+                <div className="room-free-slots" role="group" aria-label="Schnellbuchung Zeitfenster">
+                  {popupQuickBookSlots.map((slot) => (
+                    <button key={slot.id} type="button" className="free-slot-chip" disabled={bookingDialogState === 'SUBMITTING'} onClick={() => void handleQuickBook(slot)}>{slot.label}</button>
+                  ))}
+                </div>
+              ) : (
+                <p className="muted">Heute keine freien Zeitfenster verfügbar.</p>
+              )}
+              {dialogErrorMessage && <p className="error-inline">{dialogErrorMessage}</p>}
             </>
           ) : (
             <>
