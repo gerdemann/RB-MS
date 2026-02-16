@@ -136,7 +136,7 @@ type RoomBookingListEntry = {
 };
 type DeskSlotAvailability = 'FREE' | 'AM_BOOKED' | 'PM_BOOKED' | 'FULL_BOOKED';
 type PopupPlacement = 'top' | 'right' | 'bottom' | 'left';
-type PopupCoordinates = { left: number; top: number; placement: PopupPlacement };
+type PopupCoordinates = { left: number; top: number; placement: PopupPlacement; maxHeight: number };
 type FloorplanTransform = { scale: number; translateX: number; translateY: number };
 type FloorplanImageSize = { width: number; height: number };
 type FloorplanImageLoadState = 'loading' | 'loaded' | 'error';
@@ -215,19 +215,23 @@ const calculatePopupCoordinates = (anchorRect: DOMRect, popupRect: DOMRect): Pop
     const overflow = overflowLeft + overflowRight + overflowTop + overflowBottom;
 
     if (overflow <= 0.5) {
+      const clampedTop = clamp(candidate.top, minTop, maxTop);
       return {
         left: clamp(candidate.left, minLeft, maxLeft),
-        top: clamp(candidate.top, minTop, maxTop),
+        top: clampedTop,
         placement,
+        maxHeight: Math.max(220, viewportHeight - clampedTop - POPUP_PADDING),
       };
     }
   }
 
   const fallback = getCandidatePosition(placements[0] ?? 'right', anchorRect, popupRect.width, popupRect.height);
+  const clampedTop = clamp(fallback.top, minTop, maxTop);
   return {
     left: clamp(fallback.left, minLeft, maxLeft),
-    top: clamp(fallback.top, minTop, maxTop),
+    top: clampedTop,
     placement: placements[0] ?? 'right',
+    maxHeight: Math.max(220, viewportHeight - clampedTop - POPUP_PADDING),
   };
 };
 
@@ -1484,8 +1488,26 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       return;
     }
 
-    const popupRect = popupRef.current.getBoundingClientRect();
-    setDeskPopupCoords(calculatePopupCoordinates(deskPopup.anchorRect, popupRect));
+    const popupElement = popupRef.current;
+    const updatePopupCoordinates = () => {
+      const popupRect = popupElement.getBoundingClientRect();
+      setDeskPopupCoords(calculatePopupCoordinates(deskPopup.anchorRect, popupRect));
+    };
+
+    updatePopupCoordinates();
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      updatePopupCoordinates();
+    });
+    observer.observe(popupElement);
+
+    return () => {
+      observer.disconnect();
+    };
   }, [deskPopup, bookingDialogState, popupDeskState, dialogErrorMessage]);
 
 
@@ -2388,8 +2410,26 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       return;
     }
 
-    const popupRect = popupRef.current.getBoundingClientRect();
-    setDeskPopupCoords(calculatePopupCoordinates(deskPopup.anchorRect, popupRect));
+    const popupElement = popupRef.current;
+    const updatePopupCoordinates = () => {
+      const popupRect = popupElement.getBoundingClientRect();
+      setDeskPopupCoords(calculatePopupCoordinates(deskPopup.anchorRect, popupRect));
+    };
+
+    updatePopupCoordinates();
+
+    if (typeof ResizeObserver === 'undefined') {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      updatePopupCoordinates();
+    });
+    observer.observe(popupElement);
+
+    return () => {
+      observer.disconnect();
+    };
   }, [deskPopup, bookingDialogState, popupDeskState, dialogErrorMessage]);
 
 
@@ -2562,7 +2602,12 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         <section
           ref={popupRef}
           className="card desk-popup"
-          style={{ left: deskPopupCoords?.left ?? deskPopup.anchorRect.left, top: deskPopupCoords?.top ?? deskPopup.anchorRect.top, visibility: deskPopupCoords ? 'visible' : 'hidden' }}
+          style={{
+            left: deskPopupCoords?.left ?? deskPopup.anchorRect.left,
+            top: deskPopupCoords?.top ?? deskPopup.anchorRect.top,
+            maxHeight: deskPopupCoords?.maxHeight,
+            visibility: deskPopupCoords ? 'visible' : 'hidden'
+          }}
           role="menu"
           data-placement={deskPopupCoords?.placement ?? 'right'}
         >
