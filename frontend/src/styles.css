@@ -87,7 +87,7 @@ input, select { border: 1px solid hsl(var(--border)); border-radius: 12px; paddi
 .top-loading-bar.is-visible{opacity:.92}
 .top-loading-bar-track{display:block;height:100%;width:34%;background:linear-gradient(90deg,rgba(59,130,246,.2),hsl(var(--primary)),rgba(59,130,246,.2));animation:indeterminate 1.1s ease-in-out infinite}
 .canvas-body{background:hsl(var(--muted)/.45);border-radius:12px;padding:2px;min-height:420px;overflow:hidden}
-.floorplan-canvas{position:relative;width:100%;height:100%}.floorplan-canvas-contain{display:grid;place-items:center}.floorplan-image{position:relative;display:block;width:100%;height:auto;border-radius:10px;z-index:0;object-fit:contain}.floorplan-image-contain{width:auto;max-width:100%;max-height:100%;object-fit:contain}.desk-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:10}
+.floorplan-canvas{position:relative;width:100%;height:100%}.floorplan-canvas-contain{display:grid;place-items:center}.floorplan-image{position:relative;display:block;width:100%;height:100%;border-radius:10px;z-index:0;object-fit:contain}.floorplan-image-contain{width:auto;max-width:100%;max-height:100%;object-fit:contain}.floorplan-marker-overlay{position:absolute;z-index:10}.desk-overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:10}
 .floorplan-viewport{position:relative;width:100%;height:100%;min-height:416px;overflow:hidden;border-radius:10px}
 .floorplan-status-banner{position:absolute;left:12px;top:12px;padding:6px 10px;border-radius:10px;background:rgba(15,23,42,.7);color:#f8fafc;font-size:12px;line-height:1.25;z-index:15;pointer-events:none;max-width:min(90%,620px);overflow-wrap:anywhere}
 .floorplan-status-banner.is-error{background:rgba(127,29,29,.86)}
