@@ -12,7 +12,7 @@ type SeriesPolicy = 'DEFAULT' | 'ALLOW' | 'DISALLOW';
 type Floorplan = { id: string; name: string; imageUrl: string; isDefault?: boolean; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean; createdAt?: string; updatedAt?: string };
 type Desk = { id: string; floorplanId: string; name: string; kind?: ResourceKind; allowSeriesOverride?: boolean | null; effectiveAllowSeries?: boolean; x: number | null; y: number | null; position?: { x: number; y: number } | null; createdAt?: string; updatedAt?: string };
 type Employee = { id: string; email: string; displayName: string; role: 'admin' | 'user'; isActive: boolean; photoUrl?: string | null; createdAt?: string; updatedAt?: string };
-type Booking = { id: string; deskId: string; userEmail: string; userDisplayName?: string; employeeId?: string; date: string; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string; createdAt?: string; updatedAt?: string };
+type Booking = { id: string; deskId: string; userEmail: string; userDisplayName?: string; employeeId?: string; date: string; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM'; startTime?: string; endTime?: string; createdAt?: string; updatedAt?: string; bookedFor?: 'SELF' | 'GUEST'; guestName?: string | null; createdByUserId?: string; createdBy?: { id: string; displayName?: string | null; email: string }; user?: { id: string; displayName?: string | null; email: string } | null };
 type DbColumn = { name: string; type: string; required: boolean; id: boolean; hasDefaultValue: boolean };
 type DbTable = { name: string; model: string; columns: DbColumn[] };
 type RouteProps = { path: string; navigate: (to: string) => void; onRoleStateChanged: () => Promise<void>; onLogout: () => Promise<void>; currentUser?: AdminSession | null };
@@ -43,6 +43,8 @@ const in7Days = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().sli
 
 const formatDate = (value?: string) => (value ? new Date(value).toLocaleString('de-DE') : '—');
 const formatDateOnly = (value?: string) => (value ? new Date(value).toLocaleDateString('de-DE') : '—');
+const getCreatorDisplay = (booking: Booking): string => booking.createdBy?.displayName?.trim() || booking.createdBy?.email || booking.userDisplayName || booking.userEmail;
+const getCreatorEmail = (booking: Booking): string => booking.createdBy?.email || booking.userEmail;
 const basePath = (path: string) => path.split('?')[0];
 const hasCreateFlag = (path: string) => path.includes('create=1');
 
@@ -1095,7 +1097,7 @@ function BookingsPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   useEffect(() => { if (hasCreateFlag(path)) setCreating(true); }, [path]);
 
   const filtered = useMemo(() => bookings.filter((booking) => {
-    const person = `${booking.userDisplayName ?? ''} ${booking.userEmail}`.toLowerCase();
+    const person = `${getCreatorDisplay(booking)} ${getCreatorEmail(booking)} ${booking.guestName ?? ''}`.toLowerCase();
     const desk = desks.find((item) => item.id === booking.deskId);
     return person.includes(personQuery.toLowerCase()) && (!deskId || booking.deskId === deskId) && (!floorplanId || desk?.floorplanId === floorplanId);
   }), [bookings, desks, deskId, floorplanId, personQuery]);
@@ -1178,7 +1180,50 @@ function BookingsPage({ path, navigate, onLogout, currentUser }: RouteProps) {
         </div>
         {state.error && <ErrorState text={state.error} onRetry={load} />}
         {selectedBookingIds.length > 0 && <div className="bulk-actions"><strong>{selectedBookingIds.length} ausgewählt</strong><div className="inline-end"><button className="btn btn-danger" disabled={isBulkDeleting} onClick={() => setBulkDeleteOpen(true)}>{isBulkDeleting ? 'Lösche…' : 'Auswahl löschen'}</button><button className="btn btn-outline" disabled={isBulkDeleting} onClick={() => setSelectedBookingIds([])}>Abbrechen</button></div></div>}
-        <div className="table-wrap booking-table-wrap"><table className="admin-table"><thead><tr><th><input type="checkbox" checked={isAllVisibleSelected} onChange={toggleAllVisibleBookings} aria-label="Alle sichtbaren Buchungen auswählen" /></th><th>Datum</th><th>Person</th><th>Ressource</th><th>Floorplan</th><th>Erstellt</th><th className="align-right">Aktionen</th></tr></thead>{state.loading && !state.ready ? <SkeletonRows columns={7} /> : <tbody>{filtered.map((booking) => { const desk = desks.find((item) => item.id === booking.deskId); const floorplan = floorplans.find((plan) => plan.id === desk?.floorplanId); return <tr key={booking.id} className={focusedBooking?.id === booking.id ? 'row-selected' : ''} onClick={() => setFocusedBookingId(booking.id)}><td><input type="checkbox" checked={selectedBookingIds.includes(booking.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleBookingSelection(booking.id)} aria-label={`Buchung ${booking.id} auswählen`} /></td><td>{formatDateOnly(booking.date)}</td><td>{booking.userDisplayName || booking.userEmail}</td><td>{desk?.name ?? booking.deskId}</td><td>{floorplan?.name ?? '—'}</td><td>{formatDate(booking.createdAt)}</td><td className="align-right"><RowMenu items={[{ label: 'Bearbeiten', onSelect: () => setEditing(booking) }, { label: 'Löschen', onSelect: () => setDeleteBooking(booking), danger: true }]} /></td></tr>; })}</tbody>}</table></div>
+        <div className="table-wrap booking-table-wrap">
+          <table className="admin-table">
+            <thead>
+              <tr>
+                <th><input type="checkbox" checked={isAllVisibleSelected} onChange={toggleAllVisibleBookings} aria-label="Alle sichtbaren Buchungen auswählen" /></th>
+                <th>Datum</th>
+                <th>Person</th>
+                <th>Gast</th>
+                <th>Ressource</th>
+                <th>Floorplan</th>
+                <th>Erstellt</th>
+                <th className="align-right">Aktionen</th>
+              </tr>
+            </thead>
+            {state.loading && !state.ready ? <SkeletonRows columns={8} /> : <tbody>{filtered.map((booking) => {
+              const desk = desks.find((item) => item.id === booking.deskId);
+              const floorplan = floorplans.find((plan) => plan.id === desk?.floorplanId);
+              const creatorName = getCreatorDisplay(booking);
+              const creatorEmail = getCreatorEmail(booking);
+              const guestLabel = booking.bookedFor === 'GUEST' ? `Ja · ${booking.guestName?.trim() || 'Unbekannt'}` : 'Nein';
+
+              return <tr key={booking.id} className={focusedBooking?.id === booking.id ? 'row-selected' : ''} onClick={() => setFocusedBookingId(booking.id)}>
+                <td><input type="checkbox" checked={selectedBookingIds.includes(booking.id)} onClick={(e) => e.stopPropagation()} onChange={() => toggleBookingSelection(booking.id)} aria-label={`Buchung ${booking.id} auswählen`} /></td>
+                <td>{formatDateOnly(booking.date)}</td>
+                <td>
+                  <div className="booking-person-cell">
+                    <Avatar displayName={creatorName} email={creatorEmail} size={24} />
+                    <span className="truncate-cell" title={creatorEmail}>{creatorName}</span>
+                  </div>
+                </td>
+                <td>
+                  <span className="booking-guest-cell truncate-cell" title={guestLabel}>
+                    {booking.bookedFor === 'GUEST' ? <Badge tone="warn">Ja</Badge> : <Badge>Nein</Badge>}
+                    {booking.bookedFor === 'GUEST' && <span className="booking-guest-name">· {booking.guestName?.trim() || 'Unbekannt'}</span>}
+                  </span>
+                </td>
+                <td>{desk?.name ?? booking.deskId}</td>
+                <td>{floorplan?.name ?? '—'}</td>
+                <td>{formatDate(booking.createdAt)}</td>
+                <td className="align-right"><RowMenu items={[{ label: 'Bearbeiten', onSelect: () => setEditing(booking) }, { label: 'Löschen', onSelect: () => setDeleteBooking(booking), danger: true }]} /></td>
+              </tr>;
+            })}</tbody>}
+          </table>
+        </div>
       </section>
 
       <aside className="card stack-sm admin-split-floor-preview bookings-floorplan-card">
@@ -1226,7 +1271,7 @@ function BookingEditor({ booking, desks, employees, floorplans, onClose, onSaved
     }
   };
 
-  return <div className="overlay"><section className="card dialog stack-sm booking-editor-dialog"><h3>{booking ? 'Buchung bearbeiten' : 'Buchung anlegen'}</h3><div className="booking-editor-layout"><form className="stack-sm" onSubmit={submit}><label className="field"><span>Floorplan</span><select required value={floorplanId} onChange={(e) => setFloorplanId(e.target.value)}>{floorplans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></label><label className="field"><span>Ressource</span><select required value={deskId} onChange={(e) => setDeskId(e.target.value)}>{floorDesks.map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select></label><input required type="date" value={date} onChange={(e) => setDate(e.target.value)} />{isRoomDesk ? <div className="split"><input required type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /><input required type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div> : <select value={slot} onChange={(e) => setSlot(e.target.value as 'FULL_DAY' | 'MORNING' | 'AFTERNOON')}><option value="FULL_DAY">Ganzer Tag</option><option value="MORNING">Vormittag</option><option value="AFTERNOON">Nachmittag</option></select>}<select required value={userEmail} onChange={(e) => setUserEmail(e.target.value)}>{employees.map((employee) => <option key={employee.id} value={employee.email}>{employee.displayName} ({employee.email})</option>)}</select><div className="inline-end"><button className="btn btn-outline" type="button" onClick={onClose}>Abbrechen</button><button className="btn">Speichern</button></div></form><div className="booking-editor-plan">{selectedFloor ? <div className="canvas-body"><FloorplanCanvas imageUrl={resolveApiUrl(selectedFloor.imageUrl) ?? selectedFloor.imageUrl} imageAlt={selectedFloor.name} desks={floorDesks.map((desk) => ({ id: desk.id, name: desk.name, kind: desk.kind, x: desk.x, y: desk.y, status: 'free' as const, booking: null, isSelected: desk.id === deskId, isHighlighted: desk.id === deskId }))} selectedDeskId={deskId} hoveredDeskId="" onHoverDesk={() => undefined} onSelectDesk={setDeskId} /></div> : <EmptyState text="Kein Floorplan ausgewählt." />}</div></div></section></div>;
+  return <div className="overlay"><section className="card dialog stack-sm booking-editor-dialog"><h3>{booking ? 'Buchung bearbeiten' : 'Buchung anlegen'}</h3>{booking && <div className="booking-editor-meta">{booking.createdBy && <p className="muted">Gebucht von: <strong>{booking.createdBy.displayName?.trim() || booking.createdBy.email}</strong></p>}{booking.bookedFor === 'GUEST' && <p className="muted">Für Gast: <strong>{booking.guestName?.trim() || 'Unbekannt'}</strong></p>}</div>}<div className="booking-editor-layout"><form className="stack-sm" onSubmit={submit}><label className="field"><span>Floorplan</span><select required value={floorplanId} onChange={(e) => setFloorplanId(e.target.value)}>{floorplans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name}</option>)}</select></label><label className="field"><span>Ressource</span><select required value={deskId} onChange={(e) => setDeskId(e.target.value)}>{floorDesks.map((desk) => <option key={desk.id} value={desk.id}>{desk.name}</option>)}</select></label><input required type="date" value={date} onChange={(e) => setDate(e.target.value)} />{isRoomDesk ? <div className="split"><input required type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /><input required type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></div> : <select value={slot} onChange={(e) => setSlot(e.target.value as 'FULL_DAY' | 'MORNING' | 'AFTERNOON')}><option value="FULL_DAY">Ganzer Tag</option><option value="MORNING">Vormittag</option><option value="AFTERNOON">Nachmittag</option></select>}<select required value={userEmail} onChange={(e) => setUserEmail(e.target.value)}>{employees.map((employee) => <option key={employee.id} value={employee.email}>{employee.displayName} ({employee.email})</option>)}</select><div className="inline-end"><button className="btn btn-outline" type="button" onClick={onClose}>Abbrechen</button><button className="btn">Speichern</button></div></form><div className="booking-editor-plan">{selectedFloor ? <div className="canvas-body booking-editor-canvas"><FloorplanCanvas imageUrl={resolveApiUrl(selectedFloor.imageUrl) ?? selectedFloor.imageUrl} imageAlt={selectedFloor.name} desks={floorDesks.map((desk) => ({ id: desk.id, name: desk.name, kind: desk.kind, x: desk.x, y: desk.y, status: 'free' as const, booking: null, isSelected: desk.id === deskId, isHighlighted: desk.id === deskId }))} selectedDeskId={deskId} hoveredDeskId="" onHoverDesk={() => undefined} onSelectDesk={setDeskId} /></div> : <EmptyState text="Kein Floorplan ausgewählt." />}</div></div></section></div>;
 }
 
 function EmployeesPage({ path, navigate, onRoleStateChanged, onLogout, currentAdminEmail, currentUser }: RouteProps & { currentAdminEmail: string }) {
