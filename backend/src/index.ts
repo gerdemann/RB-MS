@@ -81,9 +81,9 @@ type EmployeeRole = 'admin' | 'user';
 type SessionRecord = {
   id: string;
   userId: string;
-  expiresAt: number;
+  expiresAt: Date;
   graphAccessToken?: string;
-  graphTokenExpiresAt?: number;
+  graphTokenExpiresAt?: Date;
 };
 type AuthUser = { id: string; email: string; displayName: string; role: EmployeeRole; isActive: boolean };
 
@@ -117,8 +117,7 @@ app.use(attachRequestId);
 
 const SESSION_COOKIE_NAME = 'rbms_session';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 12;
-const sessions = new Map<string, SessionRecord>();
-type OidcFlowState = { nonce: string; createdAt: number };
+type OidcFlowState = { nonce: string; createdAt: Date };
 const OIDC_STATE_TTL_MS = 1000 * 60 * 10;
 const parseCookies = (cookieHeader?: string): Record<string, string> => {
   if (!cookieHeader) return {};
@@ -145,28 +144,34 @@ const clearSessionCookies = (res: express.Response) => {
   res.clearCookie(SESSION_COOKIE_NAME, options);
 };
 
-const createSession = (userId: string, options?: { graphAccessToken?: string; graphTokenExpiresInSeconds?: number }): SessionRecord => {
+const createSession = async (userId: string, options?: { graphAccessToken?: string; graphTokenExpiresInSeconds?: number }): Promise<SessionRecord> => {
   const now = Date.now();
   const graphTokenExpiresAt = options?.graphTokenExpiresInSeconds
-    ? now + (options.graphTokenExpiresInSeconds * 1000)
+    ? new Date(now + (options.graphTokenExpiresInSeconds * 1000))
     : undefined;
   const session: SessionRecord = {
     id: crypto.randomUUID(),
     userId,
-    expiresAt: now + SESSION_TTL_MS,
+    expiresAt: new Date(now + SESSION_TTL_MS),
     ...(options?.graphAccessToken ? { graphAccessToken: options.graphAccessToken } : {}),
     ...(graphTokenExpiresAt ? { graphTokenExpiresAt } : {})
   };
-  sessions.set(session.id, session);
+  await prisma.session.create({
+    data: {
+      id: session.id,
+      userId: session.userId,
+      expiresAt: session.expiresAt,
+      graphAccessToken: session.graphAccessToken,
+      graphTokenExpiresAt: session.graphTokenExpiresAt
+    }
+  });
   return session;
 };
 
-const destroySession = (sessionId?: string) => {
+const destroySession = async (sessionId?: string) => {
   if (!sessionId) return;
-  sessions.delete(sessionId);
+  await prisma.session.deleteMany({ where: { id: sessionId } });
 };
-
-const oidcStates = new Map<string, OidcFlowState>();
 const ENTRA_AUTHORITY = `https://login.microsoftonline.com/${ENTRA_TENANT_ID}/v2.0`;
 const ENTRA_DISCOVERY_URL = `${ENTRA_AUTHORITY}/.well-known/openid-configuration`;
 type OidcMetadata = { authorization_endpoint: string; token_endpoint: string; jwks_uri: string; issuer: string };
@@ -193,19 +198,29 @@ const parseBase64UrlJson = <T>(value: string): T => {
   return JSON.parse(Buffer.from(normalized, 'base64').toString('utf8')) as T;
 };
 
-const createOidcState = (): { state: string; nonce: string } => {
+const createOidcState = async (): Promise<{ state: string; nonce: string }> => {
   const state = crypto.randomBytes(16).toString('hex');
   const nonce = crypto.randomBytes(16).toString('hex');
-  oidcStates.set(state, { nonce, createdAt: Date.now() });
+  await prisma.oidcState.create({
+    data: {
+      state,
+      nonce,
+      createdAt: new Date()
+    }
+  });
   return { state, nonce };
 };
 
-const consumeOidcState = (state: string): OidcFlowState | null => {
-  const current = oidcStates.get(state) ?? null;
-  oidcStates.delete(state);
+const consumeOidcState = async (state: string): Promise<OidcFlowState | null> => {
+  const current = await prisma.$transaction(async (tx) => {
+    const found = await tx.oidcState.findUnique({ where: { state } });
+    if (!found) return null;
+    await tx.oidcState.delete({ where: { state } });
+    return found;
+  });
 
   if (!current) return null;
-  if (Date.now() - current.createdAt > OIDC_STATE_TTL_MS) return null;
+  if (Date.now() - current.createdAt.getTime() > OIDC_STATE_TTL_MS) return null;
   return current;
 };
 
@@ -317,9 +332,9 @@ const attachAuthUser: express.RequestHandler = async (req, _res, next) => {
     return;
   }
 
-  const session = sessions.get(sessionId);
-  if (!session || session.expiresAt <= Date.now()) {
-    destroySession(sessionId);
+  const session = await prisma.session.findUnique({ where: { id: sessionId } });
+  if (!session || session.expiresAt.getTime() <= Date.now()) {
+    await destroySession(sessionId);
     req.authFailureReason = 'SESSION_INVALID_OR_EXPIRED';
     next();
     return;
@@ -337,15 +352,24 @@ const attachAuthUser: express.RequestHandler = async (req, _res, next) => {
   });
 
   if (!user || !user.isActive) {
-    destroySession(sessionId);
+    await destroySession(sessionId);
     req.authFailureReason = 'USER_MISSING_OR_INACTIVE';
     next();
     return;
   }
 
-  session.expiresAt = Date.now() + SESSION_TTL_MS;
-  sessions.set(session.id, session);
-  req.authSession = session;
+  const refreshedExpiresAt = new Date(Date.now() + SESSION_TTL_MS);
+  await prisma.session.update({
+    where: { id: session.id },
+    data: { expiresAt: refreshedExpiresAt }
+  });
+  req.authSession = {
+    id: session.id,
+    userId: session.userId,
+    expiresAt: refreshedExpiresAt,
+    graphAccessToken: session.graphAccessToken ?? undefined,
+    graphTokenExpiresAt: session.graphTokenExpiresAt ?? undefined
+  };
   req.authUser = {
     id: user.id,
     email: user.email,
@@ -1140,7 +1164,7 @@ app.get('/auth/entra/start', async (_req, res) => {
   }
 
   const metadata = await loadOidcMetadata();
-  const { state, nonce } = createOidcState();
+  const { state, nonce } = await createOidcState();
   const query = new URLSearchParams({
     client_id: ENTRA_CLIENT_ID as string,
     response_type: 'code',
@@ -1158,7 +1182,7 @@ app.get('/auth/entra/callback', async (req, res) => {
   try {
     const code = typeof req.query.code === 'string' ? req.query.code : null;
     const stateParam = typeof req.query.state === 'string' ? req.query.state : '';
-    const oidcState = consumeOidcState(stateParam);
+    const oidcState = await consumeOidcState(stateParam);
     if (!code || !oidcState) {
       res.status(401).json({ code: 'OIDC_VALIDATION_FAILED', message: 'Invalid callback parameters' });
       return;
@@ -1213,7 +1237,7 @@ app.get('/auth/entra/callback', async (req, res) => {
     } else {
       await syncEmployeePhotoWithAppToken({ id: user.employeeId, entraOid: oid, email });
     }
-    const session = createSession(user.id, {
+    const session = await createSession(user.id, {
       graphAccessToken: tokenPayload.access_token,
       graphTokenExpiresInSeconds: tokenPayload.expires_in
     });
@@ -1258,7 +1282,7 @@ app.post('/auth/login', async (req, res) => {
       return;
     }
 
-    const session = createSession(user.id);
+    const session = await createSession(user.id);
     applySessionCookies(res, session);
 
     const employee = await prisma.employee.findUnique({
@@ -1292,9 +1316,9 @@ app.post('/auth/login', async (req, res) => {
   }
 });
 
-app.post('/auth/logout', (req, res) => {
+app.post('/auth/logout', async (req, res) => {
   const sessionId = parseCookies(req.headers.cookie)[SESSION_COOKIE_NAME];
-  destroySession(sessionId);
+  await destroySession(sessionId);
   clearSessionCookies(res);
   res.status(204).send();
 });
@@ -1340,7 +1364,7 @@ app.get('/user/me/photo', requireAuthenticated, async (req, res) => {
   const graphAccessToken = req.authSession?.graphAccessToken;
   const graphTokenExpiresAt = req.authSession?.graphTokenExpiresAt;
 
-  if (!graphAccessToken || !graphTokenExpiresAt || graphTokenExpiresAt <= Date.now()) {
+  if (!graphAccessToken || !graphTokenExpiresAt || graphTokenExpiresAt.getTime() <= Date.now()) {
     res.status(204).send();
     return;
   }

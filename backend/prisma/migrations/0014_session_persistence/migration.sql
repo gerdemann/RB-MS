@@ -1,0 +1,28 @@
+CREATE TABLE "Session" (
+  "id" TEXT NOT NULL,
+  "userId" TEXT NOT NULL,
+  "expiresAt" TIMESTAMP(3) NOT NULL,
+  "graphAccessToken" TEXT,
+  "graphTokenExpiresAt" TIMESTAMP(3),
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt" TIMESTAMP(3) NOT NULL,
+
+  CONSTRAINT "Session_pkey" PRIMARY KEY ("id")
+);
+
+CREATE TABLE "OidcState" (
+  "state" TEXT NOT NULL,
+  "nonce" TEXT NOT NULL,
+  "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  CONSTRAINT "OidcState_pkey" PRIMARY KEY ("state")
+);
+
+CREATE INDEX "Session_userId_idx" ON "Session"("userId");
+CREATE INDEX "Session_expiresAt_idx" ON "Session"("expiresAt");
+CREATE INDEX "OidcState_createdAt_idx" ON "OidcState"("createdAt");
+
+ALTER TABLE "Session"
+  ADD CONSTRAINT "Session_userId_fkey"
+  FOREIGN KEY ("userId") REFERENCES "User"("id")
+  ON DELETE CASCADE ON UPDATE CASCADE;
