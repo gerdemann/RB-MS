@@ -640,6 +640,16 @@ const normalizeDeskPosition = (desk: Desk, imageSize: { width: number; height: n
   return raw;
 };
 
+
+const toDeskPercentPosition = (desk: Desk, imageSize: { width: number; height: number } | null): { xPct: number; yPct: number } | null => {
+  const normalized = normalizeDeskPosition(desk, imageSize);
+  if (!normalized || !imageSize || imageSize.width <= 0 || imageSize.height <= 0) return null;
+  return {
+    xPct: Math.max(0, Math.min(100, (normalized.x / imageSize.width) * 100)),
+    yPct: Math.max(0, Math.min(100, (normalized.y / imageSize.height) * 100)),
+  };
+};
+
 const formatDateTimeShort = (value?: string) => {
   if (!value) return '—';
   const date = new Date(value);
@@ -672,6 +682,7 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const [isSavingPosition, setIsSavingPosition] = useState(false);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
   const [renderSize, setRenderSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [displayedRect, setDisplayedRect] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [isRepairingPositions, setIsRepairingPositions] = useState(false);
   const rowRefs = useRef<Record<string, HTMLTableRowElement | null>>({});
 
@@ -980,16 +991,22 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
                 <FloorplanCanvas
                     imageUrl={floorplan.imageUrl}
                     imageAlt={floorplan.name}
-                    desks={desks.filter(hasDeskPosition).map((desk) => ({
-                      ...(normalizeDeskPosition(desk, imageSize) ?? { x: null, y: null }),
-                      id: desk.id,
-                      name: desk.name,
-                      kind: desk.kind,
-                      status: 'free',
-                      booking: null,
-                      isSelected: selectedDeskIds.has(desk.id),
-                      isHighlighted: selectedDeskId === desk.id || hoveredDeskId === desk.id
-                    }))}
+                    desks={desks.filter(hasDeskPosition).map((desk) => {
+                      const mapped = normalizeDeskPosition(desk, imageSize) ?? { x: null, y: null };
+                      const mappedPct = toDeskPercentPosition(desk, imageSize);
+                      return {
+                        ...mapped,
+                        xPct: mappedPct?.xPct,
+                        yPct: mappedPct?.yPct,
+                        id: desk.id,
+                        name: desk.name,
+                        kind: desk.kind,
+                        status: 'free',
+                        booking: null,
+                        isSelected: selectedDeskIds.has(desk.id),
+                        isHighlighted: selectedDeskId === desk.id || hoveredDeskId === desk.id
+                      };
+                    })}
                     selectedDeskId={selectedDeskId}
                     hoveredDeskId={hoveredDeskId}
                     onHoverDesk={setHoveredDeskId}
@@ -1002,6 +1019,7 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
                     }}
                     onImageLoad={({ width, height }) => setImageSize({ width, height })}
                     onImageRenderSizeChange={setRenderSize}
+                    onDisplayedRectChange={setDisplayedRect}
                     debugEnabled={debugEnabled}
                   />
               </div>
@@ -1014,13 +1032,19 @@ function DesksPage({ path, navigate, onLogout, currentUser }: RouteProps) {
               {debugEnabled && (
                 <section className="card stack-xs">
                   <strong>Floorplan Debug</strong>
-                  <p className="muted">imgW/imgH: {Math.round(imageSize?.width ?? 0)} / {Math.round(imageSize?.height ?? 0)}</p>
-                  <p className="muted">renderW/renderH: {Math.round(renderSize.width)} / {Math.round(renderSize.height)}</p>
+                  <p className="muted">containerRect(left/top/width/height): 0 / 0 / {Math.round(renderSize.width)} / {Math.round(renderSize.height)}</p>
+                  <p className="muted">imageNatural(width/height): {Math.round(imageSize?.width ?? 0)} / {Math.round(imageSize?.height ?? 0)}</p>
+                  <p className="muted">drawnRect(left/top/width/height): {Math.round(displayedRect?.left ?? 0)} / {Math.round(displayedRect?.top ?? 0)} / {Math.round(displayedRect?.width ?? 0)} / {Math.round(displayedRect?.height ?? 0)}</p>
+                  {(() => {
+                    const firstDesk = desks.find(hasDeskPosition);
+                    if (!firstDesk || !displayedRect) return <p className="muted">firstMarker(left/top): —</p>;
+                    const pct = toDeskPercentPosition(firstDesk, imageSize);
+                    if (!pct) return <p className="muted">firstMarker(left/top): —</p>;
+                    const left = displayedRect.left + (pct.xPct / 100) * displayedRect.width;
+                    const top = displayedRect.top + (pct.yPct / 100) * displayedRect.height;
+                    return <p className="muted">firstMarker(left/top): {Math.round(left)} / {Math.round(top)} (deskId={firstDesk.id})</p>;
+                  })()}
                   <p className="muted">null positions: {desks.filter((desk) => !hasDeskPosition(desk)).length}</p>
-                  {desks.slice(0, 5).map((desk) => {
-                    const mapped = normalizeDeskPosition(desk, imageSize);
-                    return <p key={desk.id} className="muted">{desk.id}: x={desk.x ?? 'null'}, y={desk.y ?? 'null'}, left={mapped ? Math.round(mapped.x) : '—'}, top={mapped ? Math.round(mapped.y) : '—'}</p>;
-                  })}
                 </section>
               )}
               {selectedDesk && (

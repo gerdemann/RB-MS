@@ -1199,9 +1199,37 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const bookingsCount = useMemo(() => (occupancy?.desks ?? []).reduce((total, desk) => total + normalizeDeskBookings(desk).length, 0), [occupancy?.desks]);
   const floorplanMarkersCount = filteredDesks.filter((desk) => Number.isFinite(desk.x) && Number.isFinite(desk.y)).length;
   const floorplanCanvasDesks = floorplanImageLoadState === 'loaded'
-    ? filteredDesks.filter((desk) => Number.isFinite(desk.x) && Number.isFinite(desk.y))
+    ? filteredDesks
+      .filter((desk) => Number.isFinite(desk.x) && Number.isFinite(desk.y))
+      .map((desk) => {
+        if (!floorplanImageSize || floorplanImageSize.width <= 0 || floorplanImageSize.height <= 0) return desk;
+        const rawX = Number(desk.x);
+        const rawY = Number(desk.y);
+        const legacyNormalized = rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1;
+        const xPct = legacyNormalized ? rawX * 100 : (rawX / floorplanImageSize.width) * 100;
+        const yPct = legacyNormalized ? rawY * 100 : (rawY / floorplanImageSize.height) * 100;
+        return { ...desk, xPct: Math.max(0, Math.min(100, xPct)), yPct: Math.max(0, Math.min(100, yPct)) };
+      })
     : [];
   const shouldWarnMissingMarkers = floorplanImageLoadState === 'loaded' && resourcesCount > 0 && floorplanMarkersCount === 0;
+
+  const firstMarkerDebug = useMemo(() => {
+    const firstDesk = floorplanCanvasDesks.find((desk) => Number.isFinite(desk.x) && Number.isFinite(desk.y));
+    if (!firstDesk || !floorplanImageSize || floorplanImageSize.width <= 0 || floorplanImageSize.height <= 0) return null;
+    const rawX = Number(firstDesk.x);
+    const rawY = Number(firstDesk.y);
+    const legacyNormalized = rawX >= 0 && rawX <= 1 && rawY >= 0 && rawY <= 1;
+    const xPct = legacyNormalized ? rawX * 100 : (rawX / floorplanImageSize.width) * 100;
+    const yPct = legacyNormalized ? rawY * 100 : (rawY / floorplanImageSize.height) * 100;
+    const clampedXPct = Math.max(0, Math.min(100, xPct));
+    const clampedYPct = Math.max(0, Math.min(100, yPct));
+    return {
+      deskId: firstDesk.id,
+      left: floorplanDisplayedRect.left + (clampedXPct / 100) * floorplanDisplayedRect.width,
+      top: floorplanDisplayedRect.top + (clampedYPct / 100) * floorplanDisplayedRect.height,
+    };
+  }, [floorplanCanvasDesks, floorplanDisplayedRect.height, floorplanDisplayedRect.left, floorplanDisplayedRect.top, floorplanDisplayedRect.width, floorplanImageSize]);
+
   const roomBookingConflict = useMemo(() => {
     if (!popupDesk || !isRoomResource(popupDesk)) return '';
     const start = bookingTimeToMinutes(bookingFormValues.startTime);
@@ -2416,9 +2444,11 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                   <div>imageStatus={floorplanImageLoadState}</div>
                   <div>error={floorplanImageError || '-'}</div>
                   <div>loadedSrc={floorplanLoadedSrc || '-'}</div>
-                  <div>naturalWidth/naturalHeight={Math.round(floorplanImageSize?.width ?? 0)}×{Math.round(floorplanImageSize?.height ?? 0)}</div>
-
-                  <div>displayedRect={Math.round(floorplanDisplayedRect.left)} / {Math.round(floorplanDisplayedRect.top)} / {Math.round(floorplanDisplayedRect.width)} / {Math.round(floorplanDisplayedRect.height)}</div>
+                  <div>containerRect(left/top/width/height)=0 / 0 / {Math.round(floorplanViewportSize.width)} / {Math.round(floorplanViewportSize.height)}</div>
+                  <div>imageNatural(width/height)={Math.round(floorplanImageSize?.width ?? 0)} / {Math.round(floorplanImageSize?.height ?? 0)}</div>
+                  <div>drawnRect(left/top/width/height)={Math.round(floorplanDisplayedRect.left)} / {Math.round(floorplanDisplayedRect.top)} / {Math.round(floorplanDisplayedRect.width)} / {Math.round(floorplanDisplayedRect.height)}</div>
+                  <div>renderedImageSize={Math.round(floorplanRenderedImageSize.width)}×{Math.round(floorplanRenderedImageSize.height)}</div>
+                  <div>firstMarker(left/top)={firstMarkerDebug ? `${Math.round(firstMarkerDebug.left)} / ${Math.round(firstMarkerDebug.top)} (deskId=${firstMarkerDebug.deskId})` : '-'}</div>
                   <div>resourcesCount={resourcesCount}</div>
                   <div>markersRenderedCount={floorplanMarkersCount}</div>
                 </div>

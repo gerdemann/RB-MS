@@ -1,9 +1,10 @@
-import { CSSProperties, MouseEvent, RefObject, memo, useEffect, useMemo, useRef, useState } from 'react';
+import { CSSProperties, memo, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { normalizeDaySlotBookings } from './daySlotBookings';
 import { resourceKindLabel } from './resourceKinds';
 import { BOOKABLE_END, BOOKABLE_START, ROOM_WINDOW_TOTAL_MINUTES } from './lib/bookingWindows';
 import { computeRoomOccupancy } from './lib/roomOccupancy';
+import { FloorplanFlatRenderer, FloorplanRect, ResolvedFlatResource } from './FloorplanFlatRenderer';
 
 type FloorplanBooking = {
   id?: string;
@@ -31,6 +32,8 @@ type FloorplanDesk = {
   kind?: string;
   x: number | null;
   y: number | null;
+  xPct?: number | null;
+  yPct?: number | null;
   status: 'free' | 'booked';
   booking: FloorplanBooking | null;
   bookings?: FloorplanBooking[];
@@ -39,8 +42,8 @@ type FloorplanDesk = {
   isSelected?: boolean;
 };
 
-type PixelPoint = { x: number; y: number };
-type DisplayedImageRect = { left: number; top: number; width: number; height: number };
+
+
 type SlotKey = 'AM' | 'PM';
 
 const PIN_HITBOX_SIZE = 44;
@@ -53,14 +56,6 @@ const ROOM_RING_WIDTH = 4;
 const START_ANGLE = -90;
 const MAX_ROOM_MARKER_LABEL_LENGTH = 4;
 
-const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
-
-const toPixelPoint = (desk: Pick<FloorplanDesk, 'x' | 'y'>): PixelPoint | null => {
-  if (!Number.isFinite(desk.x) || !Number.isFinite(desk.y)) return null;
-  return { x: Number(desk.x), y: Number(desk.y) };
-};
-
-const isLegacyNormalizedPoint = (point: PixelPoint): boolean => point.x >= 0 && point.x <= 1 && point.y >= 0 && point.y <= 1;
 
 const getInitials = (name?: string, email?: string): string => {
   const source = (name?.trim() || email?.split('@')[0] || '??').replace(/[^\p{L}\s]/gu, ' ');
@@ -150,32 +145,13 @@ type FloorplanCanvasProps = {
   onImageLoad?: (payload: { width: number; height: number; src: string }) => void;
   onImageError?: (payload: { src: string; message: string }) => void;
   onImageRenderSizeChange?: (size: { width: number; height: number }) => void;
-  onDisplayedRectChange?: (rect: DisplayedImageRect) => void;
+  onDisplayedRectChange?: (rect: FloorplanRect) => void;
   containImageOnly?: boolean;
   debugEnabled?: boolean;
   style?: CSSProperties;
 };
 
-const FloorplanImage = memo(function FloorplanImage({ imageUrl, imageAlt, imgRef, onImageLoad, onImageError, containImageOnly = false }: { imageUrl: string; imageAlt: string; imgRef: RefObject<HTMLImageElement>; onImageLoad?: (payload: { width: number; height: number; src: string }) => void; onImageError?: (payload: { src: string; message: string }) => void; containImageOnly?: boolean }) {
-  return (
-    <img
-      ref={imgRef}
-      src={imageUrl}
-      alt={imageAlt}
-      className={`floorplan-image ${containImageOnly ? 'floorplan-image-contain' : ''}`}
-      onLoad={(event) => {
-        const { naturalWidth, naturalHeight, currentSrc } = event.currentTarget;
-        if (naturalWidth > 0 && naturalHeight > 0) onImageLoad?.({ width: naturalWidth, height: naturalHeight, src: currentSrc || imageUrl });
-      }}
-      onError={(event) => {
-        const target = event.currentTarget;
-        onImageError?.({ src: target.currentSrc || imageUrl, message: `Failed to load image: ${target.currentSrc || imageUrl}` });
-      }}
-    />
-  );
-});
-
-const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDeskId, selectedDate, bookingVersion, onHoverDesk, onSelectDesk, onDeskDoubleClick, onDeskAnchorChange, disablePulseAnimation = false, debugEnabled = false, displayedRect, imageSize }: { desks: FloorplanDesk[]; selectedDeskId: string; hoveredDeskId: string; selectedDate?: string; bookingVersion?: number; onHoverDesk: (deskId: string) => void; onSelectDesk: (deskId: string, anchorEl?: HTMLElement) => void; onDeskDoubleClick?: (deskId: string) => void; onDeskAnchorChange?: (deskId: string, element: HTMLElement | null) => void; disablePulseAnimation?: boolean; debugEnabled?: boolean; displayedRect: DisplayedImageRect | null; imageSize: { width: number; height: number } | null; }) {
+const DeskOverlay = memo(function DeskOverlay({ markers, selectedDeskId, hoveredDeskId, selectedDate, bookingVersion, onHoverDesk, onSelectDesk, onDeskDoubleClick, onDeskAnchorChange, disablePulseAnimation = false, debugEnabled = false }: { markers: ResolvedFlatResource<FloorplanDesk>[]; selectedDeskId: string; hoveredDeskId: string; selectedDate?: string; bookingVersion?: number; onHoverDesk: (deskId: string) => void; onSelectDesk: (deskId: string, anchorEl?: HTMLElement) => void; onDeskDoubleClick?: (deskId: string) => void; onDeskAnchorChange?: (deskId: string, element: HTMLElement | null) => void; disablePulseAnimation?: boolean; debugEnabled?: boolean; }) {
   const [imageStates, setImageStates] = useState<Record<string, boolean>>({});
   const [tooltip, setTooltip] = useState<{ deskId: string; left: number; top: number } | null>(null);
 
@@ -190,29 +166,12 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
     };
   }, [tooltip]);
 
-  const tooltipDesk = desks.find((desk) => desk.id === tooltip?.deskId);
-  const mapPoint = useMemo(() => {
-    if (!displayedRect || !imageSize || imageSize.width <= 0 || imageSize.height <= 0) return null;
-    const sx = displayedRect.width / imageSize.width;
-    const sy = displayedRect.height / imageSize.height;
-    return (point: PixelPoint): { xPct: number; yPct: number } => ({
-      xPct: clamp01(point.x * sx / displayedRect.width),
-      yPct: clamp01(point.y * sy / displayedRect.height),
-    });
-  }, [displayedRect, imageSize]);
+  const tooltipDesk = markers.find((entry) => entry.resource.id === tooltip?.deskId)?.resource;
 
   return (
     <>
       <div className="desk-overlay" data-version={bookingVersion}>
-        {desks.map((desk) => {
-          const rawPoint = toPixelPoint(desk);
-          if (!rawPoint) return null;
-          const isLegacyPoint = isLegacyNormalizedPoint(rawPoint);
-          if (!displayedRect || !mapPoint || (isLegacyPoint && !imageSize)) return null;
-          const point = isLegacyPoint && imageSize
-            ? { x: rawPoint.x * imageSize.width, y: rawPoint.y * imageSize.height }
-            : rawPoint;
-          const displayPoint = mapPoint(point);
+        {markers.map(({ resource: desk, xPct, yPct }) => {
           const bookings = normalizeBookings(desk);
           const isRoom = desk.kind === 'RAUM';
           const roomMarkerLabel = isRoom ? getRoomMarkerLabel(desk) : null;
@@ -252,8 +211,8 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
               className={`desk-pin ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''} ${desk.isCurrentUsersDesk ? 'is-own-desk' : ''} ${desk.isHighlighted ? 'is-highlighted' : ''} ${desk.isSelected ? 'is-selected' : ''} ${!isClickable ? 'is-click-disabled' : ''}`}
               data-free={shouldShowPulse ? 'true' : 'false'}
               style={{
-                left: `${displayedRect.left + displayPoint.xPct * displayedRect.width}px`,
-                top: `${displayedRect.top + displayPoint.yPct * displayedRect.height}px`
+                left: `${xPct}%`,
+                top: `${yPct}%`
               }}
               onMouseEnter={(event) => {
                 const rect = event.currentTarget.getBoundingClientRect();
@@ -400,75 +359,33 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
 });
 
 export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hoveredDeskId, selectedDate, bookingVersion, onHoverDesk, onSelectDesk, onCanvasClick, onDeskDoubleClick, onDeskAnchorChange, disablePulseAnimation = false, onImageLoad, onImageError, onImageRenderSizeChange, onDisplayedRectChange, containImageOnly = false, debugEnabled = false, style }: FloorplanCanvasProps) {
-  const imgRef = useRef<HTMLImageElement | null>(null);
-  const canvasRef = useRef<HTMLDivElement | null>(null);
-  const [naturalSize, setNaturalSize] = useState<{ width: number; height: number } | null>(null);
-  const [displayedRect, setDisplayedRect] = useState<DisplayedImageRect | null>(null);
-
-  useEffect(() => {
-    setNaturalSize(null);
-  }, [imageUrl]);
-
-  const syncDisplayedRect = useMemo(() => {
-    return () => {
-      if (!canvasRef.current || !naturalSize) return;
-      const containerWidth = canvasRef.current.clientWidth;
-      const containerHeight = canvasRef.current.clientHeight;
-      if (containerWidth <= 0 || containerHeight <= 0 || naturalSize.width <= 0 || naturalSize.height <= 0) return;
-
-      const scale = Math.min(containerWidth / naturalSize.width, containerHeight / naturalSize.height);
-      const width = naturalSize.width * scale;
-      const height = naturalSize.height * scale;
-      const left = (containerWidth - width) / 2;
-      const top = (containerHeight - height) / 2;
-      const nextRect = { left, top, width, height };
-      setDisplayedRect(nextRect);
-      onImageRenderSizeChange?.({ width, height });
-      onDisplayedRectChange?.(nextRect);
-    };
-  }, [naturalSize, onDisplayedRectChange, onImageRenderSizeChange]);
-
-  useEffect(() => {
-    if (!canvasRef.current || !naturalSize) return;
-    syncDisplayedRect();
-    const observer = new ResizeObserver(syncDisplayedRect);
-    observer.observe(canvasRef.current);
-    return () => observer.disconnect();
-  }, [naturalSize, syncDisplayedRect]);
-
-  const handleCanvasClick = (event: MouseEvent<HTMLDivElement>) => {
-    if (!onCanvasClick || !canvasRef.current || !displayedRect || !naturalSize) return;
-    const canvasRect = canvasRef.current.getBoundingClientRect();
-    const localX = event.clientX - canvasRect.left;
-    const localY = event.clientY - canvasRect.top;
-    const xNorm = clamp01((localX - displayedRect.left) / Math.max(displayedRect.width, 1));
-    const yNorm = clamp01((localY - displayedRect.top) / Math.max(displayedRect.height, 1));
-    const imageWidth = naturalSize.width;
-    const imageHeight = naturalSize.height;
-    onCanvasClick({
-      xPct: xNorm,
-      yPct: yNorm,
-      x: xNorm * imageWidth,
-      y: yNorm * imageHeight,
-      imageWidth,
-      imageHeight
-    });
-  };
-
   return (
-    <div ref={canvasRef} className={`floorplan-canvas ${containImageOnly ? 'floorplan-canvas-contain' : ''}`} role="presentation" onClick={handleCanvasClick} style={style}>
-      <FloorplanImage
-        imageUrl={imageUrl}
-        imageAlt={imageAlt}
-        imgRef={imgRef}
-        onImageLoad={(payload) => {
-          setNaturalSize({ width: payload.width, height: payload.height });
-          onImageLoad?.(payload);
-        }}
-        onImageError={onImageError}
-        containImageOnly={containImageOnly}
-      />
-      {!containImageOnly && <DeskOverlay desks={desks} selectedDeskId={selectedDeskId} hoveredDeskId={hoveredDeskId} selectedDate={selectedDate} bookingVersion={bookingVersion} onHoverDesk={onHoverDesk} onSelectDesk={onSelectDesk} onDeskDoubleClick={onDeskDoubleClick} onDeskAnchorChange={onDeskAnchorChange} disablePulseAnimation={disablePulseAnimation} debugEnabled={debugEnabled} displayedRect={displayedRect} imageSize={naturalSize} />}
-    </div>
+    <FloorplanFlatRenderer
+      imageSrc={imageUrl}
+      imageAlt={imageAlt}
+      resources={desks}
+      onCanvasClick={onCanvasClick}
+      onImageLoad={onImageLoad}
+      onImageError={onImageError}
+      onImageRenderSizeChange={onImageRenderSizeChange}
+      onDisplayedRectChange={onDisplayedRectChange}
+      containImageOnly={containImageOnly}
+      style={style}
+      renderMarkers={(markers) => (!containImageOnly ? (
+        <DeskOverlay
+          markers={markers}
+          selectedDeskId={selectedDeskId}
+          hoveredDeskId={hoveredDeskId}
+          selectedDate={selectedDate}
+          bookingVersion={bookingVersion}
+          onHoverDesk={onHoverDesk}
+          onSelectDesk={onSelectDesk}
+          onDeskDoubleClick={onDeskDoubleClick}
+          onDeskAnchorChange={onDeskAnchorChange}
+          disablePulseAnimation={disablePulseAnimation}
+          debugEnabled={debugEnabled}
+        />
+      ) : null)}
+    />
   );
 }
