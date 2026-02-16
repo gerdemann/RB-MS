@@ -286,20 +286,20 @@ const getBookingCreatorName = (booking: { createdBy?: BookingActor }): string =>
   return booking.createdBy?.displayName ?? booking.createdBy?.name ?? 'Unbekannt';
 };
 
-const canCancelBooking = (
+const isMineForStyling = (
   booking: { bookedFor?: 'SELF' | 'GUEST'; userId?: string | null; createdByUserId?: string },
   me?: AuthUser | null
 ): boolean => {
   if (!me) return false;
-  if (me.role === 'admin') return true;
   if (booking.bookedFor === 'SELF') return Boolean(booking.userId && booking.userId === me.id);
   if (booking.bookedFor === 'GUEST') return Boolean(booking.createdByUserId && booking.createdByUserId === me.id);
   return false;
 };
 
-const isMine = (booking: { bookedFor?: 'SELF' | 'GUEST'; userId?: string | null; createdByUserId?: string }, me?: AuthUser | null): boolean => {
-  return canCancelBooking(booking, me);
-};
+const canCancelBooking = (
+  booking: { bookedFor?: 'SELF' | 'GUEST'; userId?: string | null; createdByUserId?: string },
+  me?: AuthUser | null
+): boolean => Boolean(me && (me.role === 'admin' || isMineForStyling(booking, me)));
 
 const formatDate = (dateString: string): string => new Date(`${dateString}T00:00:00.000Z`).toLocaleDateString('de-DE');
 const bookingBelongsToDay = (booking: { startTime?: string }, selectedDateValue: string): boolean => {
@@ -460,13 +460,13 @@ const enrichDeskBookings = ({
   employeesById,
   employeesByEmail,
   currentUserEmail,
-  currentUserId
+  currentUser
 }: {
   desks: OccupancyDesk[];
   employeesById: Map<string, BookingEmployee>;
   employeesByEmail: Map<string, BookingEmployee>;
   currentUserEmail?: string;
-  currentUserId?: string;
+  currentUser?: AuthUser | null;
 }): OccupancyDesk[] => desks.map((desk) => {
   const normalizedBookings = normalizeDeskBookings(desk).map((booking) => {
     const normalizedEmail = booking.userEmail?.toLowerCase();
@@ -480,9 +480,7 @@ const enrichDeskBookings = ({
       : undefined;
     const employeePhotoUrl = resolveApiUrl(employee?.photoUrl);
     const bookingPhotoUrl = resolveApiUrl(booking.userPhotoUrl);
-    const isMineByEmail = Boolean(currentUserEmail && normalizedEmail && normalizedEmail === currentUserEmail.toLowerCase());
-    const isMineByUserId = Boolean(currentUserId && booking.userId && booking.userId === currentUserId && booking.bookedFor === 'SELF');
-    const isMineByCreator = Boolean(currentUserId && booking.createdByUserId && booking.createdByUserId === currentUserId && booking.bookedFor === 'GUEST');
+    const isCurrentUser = isMineForStyling(booking, currentUser);
 
     return {
       ...booking,
@@ -490,7 +488,7 @@ const enrichDeskBookings = ({
       userFirstName: booking.userFirstName ?? employee?.firstName ?? getFirstName({ displayName: booking.userDisplayName ?? employee?.displayName, email: booking.userEmail ?? undefined }),
       userDisplayName: booking.userDisplayName ?? employee?.displayName,
       userPhotoUrl: bookingPhotoUrl ?? employeePhotoUrl ?? fallbackPhotoUrl,
-      isCurrentUser: isMineByEmail || isMineByUserId || isMineByCreator
+      isCurrentUser
     };
   });
 
@@ -1059,8 +1057,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     employeesById,
     employeesByEmail,
     currentUserEmail,
-    currentUserId: currentUser?.id
-  }), [occupancy?.desks, employeesByEmail, employeesById, currentUserEmail, currentUser?.id]);
+    currentUser
+  }), [occupancy?.desks, employeesByEmail, employeesById, currentUserEmail, currentUser]);
   const selectableResourceKinds = useMemo(() => {
     const availableKinds = new Set<ResourceKind>();
     for (const desk of desks) {
@@ -1129,9 +1127,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         if (start === null || end === null || end <= start) return [];
         const clamped = clampInterval({ startMin: start, endMin: end }, ROOM_WINDOW_START_MINUTES, ROOM_WINDOW_END_MINUTES);
         if (!clamped) return [];
-        const bookingEmail = booking.user?.email?.toLowerCase();
-        const mine = isMine(booking, currentUser);
-        const isCurrentUser = mine || Boolean(currentUserEmail && bookingEmail && bookingEmail === currentUserEmail.toLowerCase());
+        const isCurrentUser = isMineForStyling(booking, currentUser);
         const canCancel = canCancelBooking(booking, currentUser);
         return [{
           id: booking.id,
@@ -1151,7 +1147,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       .sort((a, b) => a.start - b.start);
 
     return rendered;
-  }, [popupRoomBookingsForSelectedDay, currentUser, currentUserEmail]);
+  }, [popupRoomBookingsForSelectedDay, currentUser]);
   const popupRoomFreeSlotChips = useMemo(() => popupRoomFreeIntervals
     .filter((interval) => interval.endMin - interval.startMin >= 30)
     .map((interval) => ({
@@ -2133,6 +2129,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       </label>
       <div className="legend-chip-list" aria-label="Legende">
         <span className="legend-chip"><i className="dot free" /> Frei</span>
+        <span className="legend-chip"><i className="dot availability-few" /> Fast voll</span>
+        <span className="legend-chip"><i className="dot availability-none" /> Voll</span>
         <span className="legend-chip"><i className="dot booked" /> Belegt</span>
         <span className="legend-chip"><i className="dot selected" /> Dein Platz</span>
       </div>
