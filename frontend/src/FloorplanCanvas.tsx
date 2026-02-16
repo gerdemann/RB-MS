@@ -123,23 +123,28 @@ type FloorplanCanvasProps = {
   onDeskDoubleClick?: (deskId: string) => void;
   onDeskAnchorChange?: (deskId: string, element: HTMLElement | null) => void;
   disablePulseAnimation?: boolean;
-  onImageLoad?: (size: { width: number; height: number }) => void;
-  onImageError?: () => void;
+  onImageLoad?: (payload: { width: number; height: number; src: string }) => void;
+  onImageError?: (payload: { src: string; message: string }) => void;
+  onImageRenderSizeChange?: (size: { width: number; height: number }) => void;
+  containImageOnly?: boolean;
   style?: CSSProperties;
 };
 
-const FloorplanImage = memo(function FloorplanImage({ imageUrl, imageAlt, imgRef, onImageLoad, onImageError }: { imageUrl: string; imageAlt: string; imgRef: RefObject<HTMLImageElement>; onImageLoad?: (size: { width: number; height: number }) => void; onImageError?: () => void }) {
+const FloorplanImage = memo(function FloorplanImage({ imageUrl, imageAlt, imgRef, onImageLoad, onImageError, containImageOnly = false }: { imageUrl: string; imageAlt: string; imgRef: RefObject<HTMLImageElement>; onImageLoad?: (payload: { width: number; height: number; src: string }) => void; onImageError?: (payload: { src: string; message: string }) => void; containImageOnly?: boolean }) {
   return (
     <img
       ref={imgRef}
       src={imageUrl}
       alt={imageAlt}
-      className="floorplan-image"
+      className={`floorplan-image ${containImageOnly ? 'floorplan-image-contain' : ''}`}
       onLoad={(event) => {
-        const { naturalWidth, naturalHeight } = event.currentTarget;
-        if (naturalWidth > 0 && naturalHeight > 0) onImageLoad?.({ width: naturalWidth, height: naturalHeight });
+        const { naturalWidth, naturalHeight, currentSrc } = event.currentTarget;
+        if (naturalWidth > 0 && naturalHeight > 0) onImageLoad?.({ width: naturalWidth, height: naturalHeight, src: currentSrc || imageUrl });
       }}
-      onError={() => onImageError?.()}
+      onError={(event) => {
+        const target = event.currentTarget;
+        onImageError?.({ src: target.currentSrc || imageUrl, message: `Failed to load image: ${target.currentSrc || imageUrl}` });
+      }}
     />
   );
 });
@@ -314,8 +319,18 @@ const DeskOverlay = memo(function DeskOverlay({ desks, selectedDeskId, hoveredDe
   );
 });
 
-export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hoveredDeskId, selectedDate, bookingVersion, onHoverDesk, onSelectDesk, onCanvasClick, onDeskDoubleClick, onDeskAnchorChange, disablePulseAnimation = false, onImageLoad, onImageError, style }: FloorplanCanvasProps) {
+export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hoveredDeskId, selectedDate, bookingVersion, onHoverDesk, onSelectDesk, onCanvasClick, onDeskDoubleClick, onDeskAnchorChange, disablePulseAnimation = false, onImageLoad, onImageError, onImageRenderSizeChange, containImageOnly = false, style }: FloorplanCanvasProps) {
   const imgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (!imgRef.current || !onImageRenderSizeChange) return;
+    const node = imgRef.current;
+    const syncSize = () => onImageRenderSizeChange({ width: node.clientWidth, height: node.clientHeight });
+    syncSize();
+    const observer = new ResizeObserver(syncSize);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [imageUrl, onImageRenderSizeChange]);
 
   const handleCanvasClick = (event: MouseEvent<HTMLDivElement>) => {
     if (!onCanvasClick || !imgRef.current) return;
@@ -328,9 +343,9 @@ export function FloorplanCanvas({ imageUrl, imageAlt, desks, selectedDeskId, hov
   };
 
   return (
-    <div className="floorplan-canvas" role="presentation" onClick={handleCanvasClick} style={style}>
-      <FloorplanImage imageUrl={imageUrl} imageAlt={imageAlt} imgRef={imgRef} onImageLoad={onImageLoad} onImageError={onImageError} />
-      <DeskOverlay desks={desks} selectedDeskId={selectedDeskId} hoveredDeskId={hoveredDeskId} selectedDate={selectedDate} bookingVersion={bookingVersion} onHoverDesk={onHoverDesk} onSelectDesk={onSelectDesk} onDeskDoubleClick={onDeskDoubleClick} onDeskAnchorChange={onDeskAnchorChange} disablePulseAnimation={disablePulseAnimation} />
+    <div className={`floorplan-canvas ${containImageOnly ? 'floorplan-canvas-contain' : ''}`} role="presentation" onClick={handleCanvasClick} style={style}>
+      <FloorplanImage imageUrl={imageUrl} imageAlt={imageAlt} imgRef={imgRef} onImageLoad={onImageLoad} onImageError={onImageError} containImageOnly={containImageOnly} />
+      {!containImageOnly && <DeskOverlay desks={desks} selectedDeskId={selectedDeskId} hoveredDeskId={hoveredDeskId} selectedDate={selectedDate} bookingVersion={bookingVersion} onHoverDesk={onHoverDesk} onSelectDesk={onSelectDesk} onDeskDoubleClick={onDeskDoubleClick} onDeskAnchorChange={onDeskAnchorChange} disablePulseAnimation={disablePulseAnimation} />}
     </div>
   );
 }
