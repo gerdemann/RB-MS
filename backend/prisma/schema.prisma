@@ -53,7 +53,8 @@ model Employee {
   role        String    @default("user")
   isActive    Boolean   @default(true)
   entraOid    String?   @unique
-  tenantId    String?
+  entraTenantId String?
+  tenantDomainId String?
   photoUrl    String?
   photoEtag   String?
   photoData   Bytes?
@@ -65,6 +66,19 @@ model Employee {
   bookingsCreated Booking[] @relation("BookingCreatedByEmployee")
   bookingsForSelf Booking[] @relation("BookingEmployee")
   recurringBookingsCreated RecurringBooking[] @relation("RecurringBookingCreatedByEmployee")
+  tenant      Tenant?   @relation(fields: [tenantDomainId], references: [id], onDelete: SetNull)
+
+  @@index([tenantDomainId])
+}
+
+model Tenant {
+  id          String      @id @default(cuid())
+  domain      String      @unique
+  name        String?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  employees   Employee[]
+  deskTenants DeskTenant[]
 }
 
 model Floorplan {
@@ -84,14 +98,32 @@ model Desk {
   name              String
   kind              ResourceKind       @default(TISCH)
   allowSeriesOverride Boolean?
+  tenantScope       DeskTenantScope    @default(ALL)
   x                 Float?
   y                 Float?
   createdAt         DateTime           @default(now())
   floorplan         Floorplan          @relation(fields: [floorplanId], references: [id], onDelete: Cascade)
   bookings          Booking[]
   recurringBookings RecurringBooking[] @relation("RecurringBookingResource")
+  deskTenants       DeskTenant[]
 
   @@index([floorplanId])
+}
+
+model DeskTenant {
+  deskId     String
+  tenantId   String
+  createdAt  DateTime @default(now())
+  desk       Desk     @relation(fields: [deskId], references: [id], onDelete: Cascade)
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([deskId, tenantId])
+  @@index([tenantId])
+}
+
+enum DeskTenantScope {
+  ALL
+  SELECTED
 }
 
 enum ResourceKind {

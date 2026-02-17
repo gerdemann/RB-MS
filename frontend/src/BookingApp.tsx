@@ -21,7 +21,7 @@ import { getLastMutation, isDebugMode, setLastMutation } from './debug/runtimeDe
 
 type Floorplan = { id: string; name: string; imageUrl: string; isDefault?: boolean; defaultResourceKind?: ResourceKind };
 type RawFloorplan = Floorplan & { image?: string; imageURL?: string };
-type FloorplanResource = { id: string; floorplanId: string; kind?: ResourceKind };
+type FloorplanResource = { id: string; floorplanId: string; kind?: ResourceKind; isBookableForMe?: boolean; tenantScope?: 'ALL' | 'SELECTED'; tenantIds?: string[] };
 type BookingActor = { id: string; displayName?: string | null; name?: string | null; email?: string | null };
 type OccupancyBookingData = {
   id?: string;
@@ -58,6 +58,9 @@ type OccupancyDesk = {
   bookings?: OccupancyBookingData[];
   isCurrentUsersDesk?: boolean;
   isHighlighted?: boolean;
+  isBookableForMe?: boolean;
+  tenantScope?: 'ALL' | 'SELECTED';
+  tenantIds?: string[];
 };
 type OccupancyPerson = { email: string; displayName?: string; deskName?: string; deskId?: string };
 type OccupancyResponse = { date: string; floorplanId: string; desks: OccupancyDesk[]; people: OccupancyPerson[] };
@@ -156,7 +159,7 @@ type FloorplanDebugCounters = {
   transformRecalcCount: number;
   resizeObserverCount: number;
 };
-type CalendarBooking = { date: string; deskId: string; daySlot?: 'AM' | 'PM' | 'FULL' };
+type CalendarBooking = { date: string; deskId: string; daySlot?: 'AM' | 'PM' | 'FULL'; slot?: 'FULL_DAY' | 'MORNING' | 'AFTERNOON' | 'CUSTOM' };
 type DayAvailabilityTone = 'many-free' | 'few-free' | 'none-free';
 type OverviewView = 'presence' | 'rooms' | 'myBookings';
 
@@ -342,6 +345,7 @@ const isRoomResource = (desk?: OccupancyDesk | null): boolean => desk?.kind === 
 
 const canBookDesk = (desk?: OccupancyDesk | null): boolean => {
   if (!desk) return false;
+  if (desk.isBookableForMe === false) return false;
   if (isRoomResource(desk)) return true;
   return getDefaultSlotForDesk(desk) !== null;
 };
@@ -1217,7 +1221,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   }, [bookingFormValues.slot, popupDesk, popupMyBookings]);
   const hasUnexpectedMultipleMyBookings = popupMyBookings.length > 1;
   const popupMode: 'create' | 'manage' = popupDesk && popupMyBookings.length > 0 ? 'manage' : 'create';
-  const popupDeskState = popupDesk ? (popupMode === 'manage' ? 'MINE' : !canBookDesk(popupDesk) ? 'TAKEN' : 'FREE') : null;
+  const popupDeskState = popupDesk ? (popupMode === 'manage' ? 'MINE' : popupDesk.isBookableForMe === false ? 'UNBOOKABLE' : !canBookDesk(popupDesk) ? 'TAKEN' : 'FREE') : null;
   const popupOwnBookingIsRecurring = useMemo(() => popupDeskBookings.some((booking) => booking.isCurrentUser && (Boolean(booking.recurringBookingId) || Boolean(booking.recurringGroupId))), [popupDeskBookings]);
   const manageSlotConflict = useMemo(() => {
     if (!popupDesk || !popupMySelectedBooking || isRoomResource(popupDesk)) return '';
@@ -1254,7 +1258,11 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
     const nextAvailability = new Map<string, DayAvailabilityTone>();
 
-    const resourcesByFloorplan = floorplanResources.filter((resource) => resource.floorplanId === selectedFloorplanId && resource.kind === selectedFloorplan?.defaultResourceKind);
+    const resourcesByFloorplan = floorplanResources.filter((resource) => (
+      resource.floorplanId === selectedFloorplanId
+      && resource.kind !== 'RAUM'
+      && resource.isBookableForMe !== false
+    ));
     const total = resourcesByFloorplan.length;
     if (total === 0) {
       availabilityCacheRef.current.set(cacheKey, nextAvailability);
@@ -1262,24 +1270,39 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     }
 
     const resourceIds = new Set(resourcesByFloorplan.map((resource) => resource.id));
-    const bookedByDay = new Map<string, Set<string>>();
+    const occupancyByDayDesk = new Map<string, Map<string, { am: boolean; pm: boolean }>>();
 
     for (const booking of calendarBookings) {
       if (!resourceIds.has(booking.deskId)) continue;
       const dayKey = toBookingDateKey(booking.date);
-      const bookedResources = bookedByDay.get(dayKey) ?? new Set<string>();
-      bookedResources.add(booking.deskId);
-      bookedByDay.set(dayKey, bookedResources);
+      const perDesk = occupancyByDayDesk.get(dayKey) ?? new Map<string, { am: boolean; pm: boolean }>();
+      const slotState = perDesk.get(booking.deskId) ?? { am: false, pm: false };
+      const normalizedSlot = booking.daySlot ?? (booking.slot === 'MORNING' ? 'AM' : booking.slot === 'AFTERNOON' ? 'PM' : booking.slot === 'FULL_DAY' ? 'FULL' : undefined);
+      if (normalizedSlot === 'FULL') {
+        slotState.am = true;
+        slotState.pm = true;
+      } else if (normalizedSlot === 'AM') {
+        slotState.am = true;
+      } else if (normalizedSlot === 'PM') {
+        slotState.pm = true;
+      }
+      perDesk.set(booking.deskId, slotState);
+      occupancyByDayDesk.set(dayKey, perDesk);
     }
 
     for (const day of calendarDays) {
       const dayKey = toDateKey(day);
-      const booked = bookedByDay.get(dayKey)?.size ?? 0;
-      const free = total - booked;
-      const freeRatio = free / total;
-      if (free <= 0) {
+      const perDesk = occupancyByDayDesk.get(dayKey) ?? new Map<string, { am: boolean; pm: boolean }>();
+      let totalFreeHalfSlots = 0;
+      for (const resource of resourcesByFloorplan) {
+        const slotState = perDesk.get(resource.id) ?? { am: false, pm: false };
+        if (!slotState.am) totalFreeHalfSlots += 1;
+        if (!slotState.pm) totalFreeHalfSlots += 1;
+      }
+
+      if (totalFreeHalfSlots <= 0) {
         nextAvailability.set(dayKey, 'none-free');
-      } else if (freeRatio <= 0.33) {
+      } else if (totalFreeHalfSlots < resourcesByFloorplan.length * 2) {
         nextAvailability.set(dayKey, 'few-free');
       } else {
         nextAvailability.set(dayKey, 'many-free');
@@ -2505,7 +2528,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       {deskPopup && popupDesk && popupDeskState && cancelFlowState !== 'CANCEL_CONFIRM_OPEN' && createPortal(
         <div className="desk-popup-overlay" role="presentation">
           <section className="card desk-popup" role="dialog" aria-modal="true" aria-labelledby="booking-panel-title">
-          {popupMode === 'create' || isRoomResource(popupDesk) ? (
+          {(popupDeskState === 'FREE' || popupDeskState === 'MINE' || (isRoomResource(popupDesk) && popupDeskState !== 'UNBOOKABLE')) ? (
             <>
               <div className="desk-popup-header">
                 <div className="stack-xxs">
@@ -2576,7 +2599,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                   <p><span className="muted">Datum</span><strong>{new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</strong></p>
                   {popupMode === 'manage' && popupMySelectedBooking
                     ? <p><span className="muted">Zeitraum</span><strong>{bookingSlotLabel(popupMySelectedBooking)}</strong></p>
-                    : !isRoomResource(popupDesk) && <p><span className="muted">Status</span><strong>{deskAvailabilityLabel(popupDeskAvailability)}</strong></p>}
+                    : !isRoomResource(popupDesk) && <p><span className="muted">Status</span><strong>{popupDeskState === 'UNBOOKABLE' ? 'Für deinen Mandanten nicht buchbar' : deskAvailabilityLabel(popupDeskAvailability)}</strong></p>}
+                  {popupDeskState === 'UNBOOKABLE' && <p className="muted">Für deinen Mandanten nicht buchbar.</p>}
                   {popupDeskBookings.map((booking) => (
                     <p key={booking.id ?? `${booking.userEmail ?? 'unknown'}-${bookingSlotLabel(booking)}`}>
                       <span className="muted">Gebucht für</span>
