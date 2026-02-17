@@ -3143,7 +3143,7 @@ const buildRecurringPayload = ({
 });
 
 app.post('/recurring-bookings', async (req, res) => {
-  const { resourceId, startDate, endDate, rangeMode, count, patternType, interval, byWeekday, byMonthday, bySetPos, byMonth, bookedFor, guestName, period, startTime, endTime, allowPartial, explicitDates, conflictStrategy } = req.body as {
+  const { resourceId, startDate, endDate, rangeMode, count, patternType, interval, byWeekday, byMonthday, bySetPos, byMonth, bookedFor, guestName, period, startTime, endTime, allowPartial, explicitDates, conflictStrategy, conflictResolution } = req.body as {
     resourceId?: string;
     startDate?: string;
     endDate?: string;
@@ -3163,6 +3163,7 @@ app.post('/recurring-bookings', async (req, res) => {
     allowPartial?: boolean;
     explicitDates?: string[];
     conflictStrategy?: 'abort' | 'ignore' | 'reschedule';
+    conflictResolution?: 'BOOK_ONLY_FREE' | 'REBOOK_CONFLICTS_AND_BOOK_FREE';
   };
 
   if (!resourceId || !startDate || !patternType) {
@@ -3299,9 +3300,15 @@ app.post('/recurring-bookings', async (req, res) => {
     return;
   }
 
-  const strategy: 'abort' | 'ignore' | 'reschedule' = conflictStrategy === 'abort' || conflictStrategy === 'ignore' || conflictStrategy === 'reschedule'
-    ? conflictStrategy
-    : (allowPartial ? 'ignore' : 'abort');
+  const strategyFromResolution: 'ignore' | 'reschedule' | null = conflictResolution === 'BOOK_ONLY_FREE'
+    ? 'ignore'
+    : conflictResolution === 'REBOOK_CONFLICTS_AND_BOOK_FREE'
+      ? 'reschedule'
+      : null;
+  const strategy: 'abort' | 'ignore' | 'reschedule' = strategyFromResolution
+    ?? (conflictStrategy === 'abort' || conflictStrategy === 'ignore' || conflictStrategy === 'reschedule'
+      ? conflictStrategy
+      : (allowPartial ? 'ignore' : 'abort'));
   const requestId = req.requestId ?? 'unknown';
   console.info('[MUT] RB_REQUEST', { requestId, employeeId: actorEmployee.id, deskId: resource.id, kind: resource.kind, strategy, occurrencesCount: targetDates.length });
 

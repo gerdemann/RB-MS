@@ -302,6 +302,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
 
   return (
     <form className="desk-booking-form" onSubmit={handleSubmit} onKeyDown={handleKeyDown}>
+      <div className="desk-booking-form-body">
       <div className="stack-xs">
         <label>Buchung für</label>
         <div className="weekday-toggle-group" role="group" aria-label="Buchung für">
@@ -475,6 +476,7 @@ export function BookingForm({ values, onChange, onSubmit, onCancel, isSubmitting
       )}
 
       {(errorMessage || localError) && <div className="error-banner" role="alert">{errorMessage || localError}</div>}
+      </div>
       <div className="desk-booking-form-footer">
         <button type="button" className="btn btn-outline" onClick={onCancel} disabled={disabled || isSubmitting} data-state={isSubmitting ? 'loading' : 'idle'}>{isSubmitting ? <><span className="btn-spinner" aria-hidden />Warten…</> : 'Abbrechen'}</button>
         <button className="btn" type="submit" disabled={disabled || isSubmitting || isFormInvalid} data-state={isSubmitting ? 'loading' : 'idle'}>{isSubmitting ? <><span className="btn-spinner" aria-hidden />Buchen…</> : 'Buchen'}</button>
