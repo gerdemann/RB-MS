@@ -8,6 +8,21 @@ type BookingMutationMeta = {
   requestId: string;
 };
 
+export type BookingCancelPreview = {
+  bookingId: string;
+  isSeries: boolean;
+  seriesBookingCount: number;
+  recurringBookingId: string | null;
+  recurringGroupId: string | null;
+  recurrence: {
+    id: string;
+    startDate: string;
+    endDate: string;
+    patternType: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY';
+    interval: number;
+  } | null;
+};
+
 type RoomCreatePayload = {
   deskId: string;
   userEmail: string;
@@ -195,4 +210,76 @@ export async function cancelRecurringBookingInstances(recurringBookingId: string
   }
 
   return { deletedCount: 0 };
+}
+
+export async function fetchBookingCancelPreview(bookingId: string): Promise<BookingCancelPreview> {
+  if (!bookingId) {
+    throw new Error('Missing bookingId');
+  }
+
+  const method = 'GET';
+  const path = `/bookings/${bookingId}/cancel-preview`;
+  const url = `${API_BASE}${path}`;
+
+  const response = await fetch(url, {
+    method,
+    credentials: 'include',
+    cache: 'no-store',
+    headers: buildHeaders()
+  });
+
+  const body = await readBodySafe(response);
+  if (!response.ok) {
+    throw new Error(extractMessage(body) || `HTTP ${response.status}`);
+  }
+
+  if (
+    typeof body === 'object'
+    && body !== null
+    && 'bookingId' in body
+    && typeof (body as { bookingId?: unknown }).bookingId === 'string'
+    && 'isSeries' in body
+    && typeof (body as { isSeries?: unknown }).isSeries === 'boolean'
+    && 'seriesBookingCount' in body
+    && typeof (body as { seriesBookingCount?: unknown }).seriesBookingCount === 'number'
+  ) {
+    return {
+      bookingId: (body as { bookingId: string }).bookingId,
+      isSeries: (body as { isSeries: boolean }).isSeries,
+      seriesBookingCount: (body as { seriesBookingCount: number }).seriesBookingCount,
+      recurringBookingId: typeof (body as { recurringBookingId?: unknown }).recurringBookingId === 'string' ? (body as { recurringBookingId: string }).recurringBookingId : null,
+      recurringGroupId: typeof (body as { recurringGroupId?: unknown }).recurringGroupId === 'string' ? (body as { recurringGroupId: string }).recurringGroupId : null,
+      recurrence: (() => {
+        const recurrence = (body as { recurrence?: unknown }).recurrence;
+        if (
+          typeof recurrence === 'object'
+          && recurrence !== null
+          && 'id' in recurrence
+          && typeof (recurrence as { id?: unknown }).id === 'string'
+          && 'startDate' in recurrence
+          && typeof (recurrence as { startDate?: unknown }).startDate === 'string'
+          && 'endDate' in recurrence
+          && typeof (recurrence as { endDate?: unknown }).endDate === 'string'
+          && 'patternType' in recurrence
+          && ((recurrence as { patternType?: unknown }).patternType === 'DAILY'
+            || (recurrence as { patternType?: unknown }).patternType === 'WEEKLY'
+            || (recurrence as { patternType?: unknown }).patternType === 'MONTHLY'
+            || (recurrence as { patternType?: unknown }).patternType === 'YEARLY')
+          && 'interval' in recurrence
+          && typeof (recurrence as { interval?: unknown }).interval === 'number'
+        ) {
+          return {
+            id: (recurrence as { id: string }).id,
+            startDate: (recurrence as { startDate: string }).startDate,
+            endDate: (recurrence as { endDate: string }).endDate,
+            patternType: (recurrence as { patternType: 'DAILY' | 'WEEKLY' | 'MONTHLY' | 'YEARLY' }).patternType,
+            interval: (recurrence as { interval: number }).interval
+          };
+        }
+        return null;
+      })()
+    };
+  }
+
+  throw new Error('Ungültige Antwort für Storno-Vorschau.');
 }
