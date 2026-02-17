@@ -4,6 +4,43 @@
 - `backend/`: Node.js + Express + Prisma (Postgres)
 - `frontend/`: Vite + React (Render Static Site)
 
+## Docker Setup
+
+### Lokales Deployment mit Docker Compose
+
+Das Projekt kann lokal mit Docker Compose gestartet werden:
+
+```bash
+docker compose up -d
+```
+
+Das startet:
+- PostgreSQL Datenbank (Port 5432)
+- Application (Frontend + Backend auf Port 3000)
+
+Die Anwendung ist dann verfügbar unter: `http://localhost:3000`
+
+**Umgebungsvariablen:** Die Standard-Werte in `docker-compose.yml` sind für Entwicklung gedacht. Für Produktion sollten diese angepasst werden (insbesondere `JWT_SECRET`, `ADMIN_PASSWORD`, etc.).
+
+### Docker Image bauen
+
+```bash
+docker build -t rbms:latest .
+```
+
+Das Image enthält:
+- Frontend (Vite Build) als statische Dateien
+- Backend (Express Server) der sowohl API als auch Frontend ausliefert
+- Prisma Client und Migrationen
+
+### GitHub Actions
+
+Bei jedem Push auf `main` oder bei Pull Requests wird automatisch ein Docker Image gebaut und ins GitHub Container Registry (GHCR) gepusht:
+
+```
+ghcr.io/gerdemann/rb-ms:latest
+```
+
 ## Deployment 
 
 ### Backend (Web Service)

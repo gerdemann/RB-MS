@@ -1,31 +1,30 @@
-# syntax=docker/dockerfile:1.7
-
 # Build frontend
-FROM node:20-alpine AS frontend-build
+FROM node:20-slim AS frontend-build
 WORKDIR /app/frontend
 
 COPY frontend/package.json frontend/package-lock.json ./
-RUN --mount=type=cache,target=/root/.npm \
-  npm ci --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 COPY frontend/ ./
 RUN npm run build
 
 # Build backend dependencies
-FROM node:20-alpine AS backend-deps
+FROM node:20-slim AS backend-deps
 WORKDIR /app/backend
+
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 COPY backend/package.json backend/package-lock.json ./
 COPY backend/prisma/schema.prisma ./prisma/schema.prisma
 
-RUN --mount=type=cache,target=/root/.npm \
-  npm ci --no-audit --no-fund
-RUN --mount=type=cache,target=/root/.cache/prisma \
-  npx prisma generate
+RUN npm ci --no-audit --no-fund
+RUN npx prisma generate
 
 # Build backend
-FROM node:20-alpine AS backend-build
+FROM node:20-slim AS backend-build
 WORKDIR /app/backend
+
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 COPY --from=backend-deps /app/backend/node_modules ./node_modules
 COPY backend/package.json backend/package-lock.json ./
@@ -36,8 +35,10 @@ COPY backend/src ./src
 RUN npm run build
 
 # Final runtime image
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 WORKDIR /app
+
+RUN apt-get update && apt-get install -y openssl && rm -rf /var/lib/apt/lists/*
 
 ENV NODE_ENV=production
 
