@@ -79,6 +79,7 @@ model Tenant {
   updatedAt   DateTime    @updatedAt
   employees   Employee[]
   deskTenants DeskTenant[]
+  floorplanTenants FloorplanTenant[]
 }
 
 model Floorplan {
@@ -86,10 +87,29 @@ model Floorplan {
   name                String
   imageUrl            String
   isDefault           Boolean      @default(false)
+  sortOrder           Int          @default(0)
+  tenantScope         FloorplanTenantScope @default(ALL)
   defaultResourceKind ResourceKind @default(TISCH)
   defaultAllowSeries  Boolean      @default(true)
   createdAt           DateTime     @default(now())
   desks               Desk[]
+  floorplanTenants    FloorplanTenant[]
+}
+
+model FloorplanTenant {
+  floorplanId String
+  tenantId    String
+  createdAt   DateTime @default(now())
+  floorplan   Floorplan @relation(fields: [floorplanId], references: [id], onDelete: Cascade)
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@id([floorplanId, tenantId])
+  @@index([tenantId])
+}
+
+enum FloorplanTenantScope {
+  ALL
+  SELECTED
 }
 
 model Desk {

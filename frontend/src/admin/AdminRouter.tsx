@@ -10,7 +10,7 @@ import { Popover } from '../components/ui/Popover';
 import { RESOURCE_KIND_OPTIONS, resourceKindLabel, type ResourceKind } from '../resourceKinds';
 
 type SeriesPolicy = 'DEFAULT' | 'ALLOW' | 'DISALLOW';
-type Floorplan = { id: string; name: string; imageUrl: string; isDefault?: boolean; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean; createdAt?: string; updatedAt?: string };
+type Floorplan = { id: string; name: string; imageUrl: string; isDefault?: boolean; sortOrder?: number; tenantScope?: 'ALL' | 'SELECTED'; tenantIds?: string[]; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean; createdAt?: string; updatedAt?: string };
 type Desk = { id: string; floorplanId: string; name: string; kind?: ResourceKind; allowSeriesOverride?: boolean | null; effectiveAllowSeries?: boolean; x: number | null; y: number | null; position?: { x: number; y: number } | null; tenantScope?: 'ALL' | 'SELECTED'; tenantIds?: string[]; createdAt?: string; updatedAt?: string };
 type Employee = { id: string; email: string; displayName: string; role: 'admin' | 'user'; isActive: boolean; photoUrl?: string | null; createdAt?: string; updatedAt?: string };
 type Tenant = { id: string; domain: string; name?: string | null; employeeCount?: number; createdAt?: string; updatedAt?: string };
@@ -367,6 +367,7 @@ function FloorplansPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const toasts = useToast();
   const [state, setState] = useState<DataState>({ loading: true, error: '', ready: false });
   const [floorplans, setFloorplans] = useState<Floorplan[]>([]);
+  const [tenants, setTenants] = useState<Tenant[]>([]);
   const [query, setQuery] = useState('');
   const [editing, setEditing] = useState<Floorplan | null>(null);
   const [showCreate, setShowCreate] = useState(hasCreateFlag(path));
@@ -375,8 +376,9 @@ function FloorplansPage({ path, navigate, onLogout, currentUser }: RouteProps) {
   const load = async () => {
     setState((current) => ({ ...current, loading: true, error: '' }));
     try {
-      const rows = await get<Floorplan[]>('/floorplans');
+      const [rows, tenantRows] = await Promise.all([get<Floorplan[]>('/floorplans'), get<Tenant[]>('/admin/tenants')]);
       setFloorplans(rows);
+      setTenants(tenantRows);
       setState({ loading: false, error: '', ready: true });
     } catch (err) {
       setState({ loading: false, error: err instanceof Error ? err.message : 'Fehler beim Laden', ready: true });
@@ -398,32 +400,43 @@ function FloorplansPage({ path, navigate, onLogout, currentUser }: RouteProps) {
           actions={<button className="btn" onClick={() => setShowCreate(true)}>Neu</button>}
         />
         {state.error && <ErrorState text={state.error} onRetry={load} />}
-        <div className="table-wrap"><table className="admin-table"><thead><tr><th>Vorschau</th><th>Name</th><th>Bild URL</th><th>Erstellt</th><th className="align-right">Aktionen</th></tr></thead>{state.loading && !state.ready ? <SkeletonRows columns={5} /> : <tbody>{filtered.map((floorplan) => <tr key={floorplan.id}><td><button className="floor-thumb-btn" onClick={() => setEditing(floorplan)} aria-label={`Floorplan ${floorplan.name} öffnen`}><img className="floor-thumb" src={resolveApiUrl(floorplan.imageUrl)} alt={floorplan.name} loading="lazy" /></button></td><td><div className="stack-xs"><button className="btn btn-ghost" onClick={() => setEditing(floorplan)}>{floorplan.name}</button>{floorplan.isDefault && <Badge tone="ok">Standard</Badge>}</div></td><td className="truncate-cell" title={floorplan.imageUrl}>{floorplan.imageUrl}</td><td>{formatDate(floorplan.createdAt)}</td><td className="align-right"><RowMenu items={[{ label: 'Bearbeiten', onSelect: () => setEditing(floorplan) }, { label: 'Löschen', onSelect: () => setPendingDelete(floorplan), danger: true }]} /></td></tr>)}</tbody>}</table></div>
+        <div className="table-wrap"><table className="admin-table"><thead><tr><th>Vorschau</th><th>Name</th><th>Reihenfolge</th><th>Sichtbarkeit</th><th>Bild URL</th><th>Erstellt</th><th className="align-right">Aktionen</th></tr></thead>{state.loading && !state.ready ? <SkeletonRows columns={7} /> : <tbody>{filtered.map((floorplan) => <tr key={floorplan.id}><td><button className="floor-thumb-btn" onClick={() => setEditing(floorplan)} aria-label={`Floorplan ${floorplan.name} öffnen`}><img className="floor-thumb" src={resolveApiUrl(floorplan.imageUrl)} alt={floorplan.name} loading="lazy" /></button></td><td><div className="stack-xs"><button className="btn btn-ghost" onClick={() => setEditing(floorplan)}>{floorplan.name}</button>{floorplan.isDefault && <Badge tone="ok">Standard</Badge>}</div></td><td>{floorplan.sortOrder ?? 0}</td><td>{floorplan.tenantScope === 'SELECTED' ? <Badge tone="warn">{(floorplan.tenantIds?.length ?? 0)} Mandant(en)</Badge> : <Badge>Alle Mandanten</Badge>}</td><td className="truncate-cell" title={floorplan.imageUrl}>{floorplan.imageUrl}</td><td>{formatDate(floorplan.createdAt)}</td><td className="align-right"><RowMenu items={[{ label: 'Bearbeiten', onSelect: () => setEditing(floorplan) }, { label: 'Löschen', onSelect: () => setPendingDelete(floorplan), danger: true }]} /></td></tr>)}</tbody>}</table></div>
         {!state.loading && filtered.length === 0 && <EmptyState text="Keine Floorpläne vorhanden." action={<button className="btn" onClick={() => setShowCreate(true)}>Neu anlegen</button>} />}
       </section>
-      {(showCreate || editing) && <FloorplanEditor floorplan={editing} onClose={() => { setShowCreate(false); setEditing(null); navigate('/admin/floorplans'); }} onSaved={async () => { setShowCreate(false); setEditing(null); toasts.success('Floorplan gespeichert'); await load(); }} onError={toasts.error} />}
+      {(showCreate || editing) && <FloorplanEditor floorplan={editing} tenants={tenants} onClose={() => { setShowCreate(false); setEditing(null); navigate('/admin/floorplans'); }} onSaved={async () => { setShowCreate(false); setEditing(null); toasts.success('Floorplan gespeichert'); await load(); }} onError={toasts.error} />}
       {pendingDelete && <ConfirmDialog title="Floorplan löschen?" description={`"${pendingDelete.name}" wird dauerhaft entfernt.`} onCancel={() => setPendingDelete(null)} onConfirm={async (event) => { const anchorRect = event.currentTarget.getBoundingClientRect(); await del(`/admin/floorplans/${pendingDelete.id}`); setPendingDelete(null); toasts.success('Floorplan gelöscht', { anchorRect }); await load(); }} />}
     </AdminLayout>
   );
 }
 
-function FloorplanEditor({ floorplan, onClose, onSaved, onError }: { floorplan: Floorplan | null; onClose: () => void; onSaved: () => Promise<void>; onError: (message: string) => void }) {
+function FloorplanEditor({ floorplan, tenants, onClose, onSaved, onError }: { floorplan: Floorplan | null; tenants: Tenant[]; onClose: () => void; onSaved: () => Promise<void>; onError: (message: string) => void }) {
   const [name, setName] = useState(floorplan?.name ?? '');
   const [imageUrl, setImageUrl] = useState(floorplan?.imageUrl ?? '');
+  const [sortOrder, setSortOrder] = useState<number>(floorplan?.sortOrder ?? 0);
+  const [tenantScope, setTenantScope] = useState<'ALL' | 'SELECTED'>(floorplan?.tenantScope ?? 'ALL');
+  const [tenantIds, setTenantIds] = useState<string[]>(floorplan?.tenantIds ?? []);
   const [defaultResourceKind, setDefaultResourceKind] = useState<ResourceKind>(floorplan?.defaultResourceKind ?? 'TISCH');
   const [defaultAllowSeries, setDefaultAllowSeries] = useState<boolean>(floorplan?.defaultAllowSeries ?? true);
   const [isDefault, setIsDefault] = useState<boolean>(floorplan?.isDefault ?? false);
+
+  const canSave = tenantScope === 'ALL' || tenantIds.length > 0;
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canSave) {
+      onError('Bitte mindestens einen Mandanten auswählen.');
+      return;
+    }
     try {
-      if (floorplan) await patch(`/admin/floorplans/${floorplan.id}`, { name, imageUrl, defaultResourceKind, defaultAllowSeries, isDefault });
-      else await post('/admin/floorplans', { name, imageUrl, defaultResourceKind, defaultAllowSeries, isDefault });
+      const payload = { name, imageUrl, sortOrder, tenantScope, tenantIds: tenantScope === 'SELECTED' ? tenantIds : [], defaultResourceKind, defaultAllowSeries, isDefault };
+      if (floorplan) await patch(`/admin/floorplans/${floorplan.id}`, payload);
+      else await post('/admin/floorplans', payload);
       await onSaved();
     } catch (err) {
       onError(err instanceof Error ? err.message : 'Speichern fehlgeschlagen');
     }
   };
-  return <div className="overlay"><section className="card dialog stack-sm"><h3>{floorplan ? 'Floorplan bearbeiten' : 'Floorplan anlegen'}</h3><form className="stack-sm" onSubmit={submit}><input required placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} /><input required placeholder="Asset URL" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} /><div className="stack-xs"><strong>Defaults</strong><label className="field"><span>Standard-Ressourcenart</span><select value={defaultResourceKind} onChange={(event) => setDefaultResourceKind(event.target.value as ResourceKind)}>{RESOURCE_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label className="field"><span>Serientermine standardmäßig erlauben</span><input type="checkbox" checked={defaultAllowSeries} onChange={(event) => setDefaultAllowSeries(event.target.checked)} /></label><label className="field"><span>Beim Login als Standard-Floorplan nutzen</span><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} /></label></div><div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn">Speichern</button></div></form></section></div>;
+  return <div className="overlay"><section className="card dialog stack-sm"><h3>{floorplan ? 'Floorplan bearbeiten' : 'Floorplan anlegen'}</h3><form className="stack-sm" onSubmit={submit}><input required placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} /><input required placeholder="Asset URL" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} /><label className="field"><span>Reihenfolge im Dropdown (kleiner zuerst)</span><input type="number" min={0} step={1} value={sortOrder} onChange={(event) => setSortOrder(Math.max(0, Number(event.target.value) || 0))} /></label><div className="field"><span>Sichtbarkeit</span><div className="stack-xs"><label className="inline"><input type="radio" checked={tenantScope === 'ALL'} onChange={() => { setTenantScope('ALL'); setTenantIds([]); }} />Alle Mandanten</label><label className="inline"><input type="radio" checked={tenantScope === 'SELECTED'} onChange={() => setTenantScope('SELECTED')} />Bestimmte Mandanten</label>{tenantScope === 'SELECTED' && <div className="stack-xs">{tenants.map((tenant) => <label key={tenant.id} className="inline"><input type="checkbox" checked={tenantIds.includes(tenant.id)} onChange={(event) => setTenantIds((current) => event.target.checked ? Array.from(new Set([...current, tenant.id])) : current.filter((id) => id !== tenant.id))} />{tenant.name ? `${tenant.name} (${tenant.domain})` : tenant.domain}</label>)}{tenants.length === 0 && <p className="muted">Keine Mandanten vorhanden.</p>}</div>}</div></div><div className="stack-xs"><strong>Defaults</strong><label className="field"><span>Standard-Ressourcenart</span><select value={defaultResourceKind} onChange={(event) => setDefaultResourceKind(event.target.value as ResourceKind)}>{RESOURCE_KIND_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label><label className="field"><span>Serientermine standardmäßig erlauben</span><input type="checkbox" checked={defaultAllowSeries} onChange={(event) => setDefaultAllowSeries(event.target.checked)} /></label><label className="field"><span>Beim Login als Standard-Floorplan nutzen</span><input type="checkbox" checked={isDefault} onChange={(event) => setIsDefault(event.target.checked)} /></label></div><div className="inline-end"><button type="button" className="btn btn-outline" onClick={onClose}>Abbrechen</button><button className="btn" disabled={!canSave}>Speichern</button></div></form></section></div>;
 }
 
 function PositionPickerDialog({ floorplan, x, y, onClose, onPick }: { floorplan: Floorplan | null; x: number | null; y: number | null; onClose: () => void; onPick: (x: number, y: number) => void }) {

@@ -3,7 +3,7 @@ import { canCancelBooking } from './auth/bookingAuth';
 import express from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { BookedFor, BookingSlot, DaySlot, DeskTenantScope, Prisma, RecurrencePatternType, RecurringBooking, ResourceKind } from '@prisma/client';
+import { BookedFor, BookingSlot, DaySlot, DeskTenantScope, FloorplanTenantScope, Prisma, RecurrencePatternType, RecurringBooking, ResourceKind } from '@prisma/client';
 import { prisma } from './prisma';
 import { expandRecurrence, MAX_SERIES_OCCURRENCES, type RecurrenceDefinition, validateRecurrenceDefinition } from './recurrence';
 
@@ -72,6 +72,7 @@ app.use((req, res, next) => {
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const RESOURCE_KINDS = new Set<ResourceKind>(['TISCH', 'PARKPLATZ', 'RAUM', 'SONSTIGES']);
 const DESK_TENANT_SCOPES = new Set<DeskTenantScope>(['ALL', 'SELECTED']);
+const FLOORPLAN_TENANT_SCOPES = new Set<FloorplanTenantScope>(['ALL', 'SELECTED']);
 const BOOKED_FOR_VALUES = new Set<BookedFor>(['SELF', 'GUEST']);
 const RECURRENCE_PATTERN_VALUES = new Set<RecurrencePatternType>(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']);
 const SERIES_BOOKING_CHUNK_SIZE = 100;
@@ -86,6 +87,12 @@ const parseDeskTenantScope = (value: unknown): DeskTenantScope | null => {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toUpperCase() as DeskTenantScope;
   return DESK_TENANT_SCOPES.has(normalized) ? normalized : null;
+};
+
+const parseFloorplanTenantScope = (value: unknown): FloorplanTenantScope | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase() as FloorplanTenantScope;
+  return FLOORPLAN_TENANT_SCOPES.has(normalized) ? normalized : null;
 };
 
 const parseBookedFor = (value: unknown): BookedFor => {
@@ -1203,6 +1210,12 @@ const isDeskBookableForTenant = (desk: { tenantScope: DeskTenantScope; deskTenan
   return (desk.deskTenants ?? []).some((entry) => entry.tenantId === tenantDomainId);
 };
 
+const isFloorplanVisibleForTenant = (floorplan: { tenantScope: FloorplanTenantScope; floorplanTenants?: Array<{ tenantId: string }> }, tenantDomainId?: string | null): boolean => {
+  if (floorplan.tenantScope === 'ALL') return true;
+  if (!tenantDomainId) return false;
+  return (floorplan.floorplanTenants ?? []).some((entry) => entry.tenantId === tenantDomainId);
+};
+
 
 app.get('/health', async (_req, res) => {
   try {
@@ -2062,9 +2075,35 @@ app.get('/me', (req, res) => {
   });
 });
 
-app.get('/floorplans', async (_req, res) => {
-  const floorplans = await prisma.floorplan.findMany({ orderBy: [{ isDefault: 'desc' }, { createdAt: 'desc' }] });
-  res.status(200).json(floorplans);
+app.get('/floorplans', async (req, res) => {
+  let actor: { role: EmployeeRole; tenantDomainId?: string | null } | null = null;
+  try {
+    actor = await requireActorEmployee(req);
+  } catch {
+    actor = null;
+  }
+
+  const floorplans = await prisma.floorplan.findMany({
+    include: { floorplanTenants: { select: { tenantId: true } } },
+    orderBy: [{ sortOrder: 'asc' }, { isDefault: 'desc' }, { createdAt: 'desc' }]
+  });
+
+  const visible = actor?.role === 'admin'
+    ? floorplans
+    : floorplans.filter((floorplan) => isFloorplanVisibleForTenant(floorplan, actor?.tenantDomainId ?? null));
+
+  res.status(200).json(visible.map((floorplan) => ({
+    id: floorplan.id,
+    name: floorplan.name,
+    imageUrl: floorplan.imageUrl,
+    isDefault: floorplan.isDefault,
+    sortOrder: floorplan.sortOrder,
+    tenantScope: floorplan.tenantScope,
+    tenantIds: floorplan.floorplanTenants.map((entry) => entry.tenantId),
+    defaultResourceKind: floorplan.defaultResourceKind,
+    defaultAllowSeries: floorplan.defaultAllowSeries,
+    createdAt: floorplan.createdAt
+  })));
 });
 
 app.get('/floorplans/:id', async (req, res) => {
@@ -2079,11 +2118,26 @@ app.get('/floorplans/:id', async (req, res) => {
 });
 
 app.get('/floorplans/:id/desks', async (req, res) => {
-  let actorTenantDomainId: string | null = null;
+  let actor: { role: EmployeeRole; tenantDomainId?: string | null } | null = null;
   try {
-    actorTenantDomainId = (await requireActorEmployee(req)).tenantDomainId ?? null;
+    actor = await requireActorEmployee(req);
   } catch {
-    actorTenantDomainId = null;
+    actor = null;
+  }
+
+  const floorplan = await prisma.floorplan.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, tenantScope: true, floorplanTenants: { select: { tenantId: true } } }
+  });
+  if (!floorplan) {
+    res.status(404).json({ error: 'not_found', message: 'Floorplan not found' });
+    return;
+  }
+
+  const isAdmin = actor?.role === 'admin';
+  if (!isAdmin && !isFloorplanVisibleForTenant(floorplan, actor?.tenantDomainId ?? null)) {
+    res.status(403).json({ error: 'forbidden', message: 'Floorplan is not visible for current tenant' });
+    return;
   }
 
   const desks = await prisma.desk.findMany({
@@ -2101,7 +2155,7 @@ app.get('/floorplans/:id/desks', async (req, res) => {
     effectiveAllowSeries: resolveEffectiveAllowSeries(desk),
     tenantScope: desk.tenantScope,
     tenantIds: desk.deskTenants.map((entry) => entry.tenantId),
-    isBookableForMe: isDeskBookableForTenant(desk, actorTenantDomainId),
+    isBookableForMe: isDeskBookableForTenant(desk, actor?.tenantDomainId ?? null),
     position: desk.x === null || desk.y === null ? null : { x: desk.x, y: desk.y },
     x: desk.x,
     y: desk.y,
@@ -3966,7 +4020,16 @@ app.get('/recurring-bookings', async (req, res) => {
 });
 
 app.post('/admin/floorplans', requireAdmin, async (req, res) => {
-  const { name, imageUrl, defaultResourceKind, defaultAllowSeries, isDefault } = req.body as { name?: string; imageUrl?: string; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean; isDefault?: boolean };
+  const { name, imageUrl, defaultResourceKind, defaultAllowSeries, isDefault, sortOrder, tenantScope, tenantIds } = req.body as {
+    name?: string;
+    imageUrl?: string;
+    defaultResourceKind?: ResourceKind;
+    defaultAllowSeries?: boolean;
+    isDefault?: boolean;
+    sortOrder?: number;
+    tenantScope?: FloorplanTenantScope;
+    tenantIds?: string[];
+  };
 
   if (!name || !imageUrl) {
     res.status(400).json({ error: 'validation', message: 'name and imageUrl are required' });
@@ -3989,22 +4052,50 @@ app.post('/admin/floorplans', requireAdmin, async (req, res) => {
     return;
   }
 
+  if (typeof sortOrder !== 'undefined' && (!Number.isInteger(sortOrder) || sortOrder < 0)) {
+    res.status(400).json({ error: 'validation', message: 'sortOrder must be a non-negative integer' });
+    return;
+  }
+
+  const parsedTenantScope = typeof tenantScope === 'undefined' ? 'ALL' : parseFloorplanTenantScope(tenantScope);
+  if (!parsedTenantScope) {
+    res.status(400).json({ error: 'validation', message: 'tenantScope must be ALL or SELECTED' });
+    return;
+  }
+
+  const normalizedTenantIds = Array.isArray(tenantIds) ? Array.from(new Set(tenantIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))) : [];
+  if (parsedTenantScope === 'SELECTED' && normalizedTenantIds.length === 0) {
+    res.status(400).json({ error: 'validation', message: 'tenantIds must not be empty for SELECTED scope' });
+    return;
+  }
+
   const floorplan = await prisma.$transaction(async (tx) => {
     if (isDefault) {
       await tx.floorplan.updateMany({ data: { isDefault: false } });
     }
 
-    return tx.floorplan.create({
+    const created = await tx.floorplan.create({
       data: {
         name,
         imageUrl,
         defaultResourceKind: parsedDefaultKind,
+        sortOrder: typeof sortOrder === 'number' ? sortOrder : 0,
+        tenantScope: parsedTenantScope,
         ...(typeof defaultAllowSeries === 'boolean' ? { defaultAllowSeries } : {}),
         ...(typeof isDefault === 'boolean' ? { isDefault } : {})
       }
     });
+
+    if (parsedTenantScope === 'SELECTED') {
+      await tx.floorplanTenant.createMany({ data: normalizedTenantIds.map((tenantId) => ({ floorplanId: created.id, tenantId })) });
+    }
+
+    return tx.floorplan.findUnique({ where: { id: created.id }, include: { floorplanTenants: { select: { tenantId: true } } } });
   });
-  res.status(201).json(floorplan);
+  res.status(201).json({
+    ...floorplan,
+    tenantIds: floorplan?.floorplanTenants.map((entry) => entry.tenantId) ?? []
+  });
 });
 
 app.patch('/admin/floorplans/:id', requireAdmin, async (req, res) => {
@@ -4014,9 +4105,21 @@ app.patch('/admin/floorplans/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, imageUrl, defaultResourceKind, defaultAllowSeries, isDefault } = req.body as { name?: string; imageUrl?: string; defaultResourceKind?: ResourceKind; defaultAllowSeries?: boolean; isDefault?: boolean };
-  if (typeof name === 'undefined' && typeof imageUrl === 'undefined' && typeof defaultResourceKind === 'undefined' && typeof defaultAllowSeries === 'undefined' && typeof isDefault === 'undefined') {
-    res.status(400).json({ error: 'validation', message: 'name, imageUrl, defaultResourceKind, defaultAllowSeries or isDefault must be provided' });
+  const { name, imageUrl, defaultResourceKind, defaultAllowSeries, isDefault, sortOrder, tenantScope, tenantIds } = req.body as {
+    name?: string;
+    imageUrl?: string;
+    defaultResourceKind?: ResourceKind;
+    defaultAllowSeries?: boolean;
+    isDefault?: boolean;
+    sortOrder?: number;
+    tenantScope?: FloorplanTenantScope;
+    tenantIds?: string[];
+  };
+  const hasTenantScope = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'tenantScope');
+  const hasTenantIds = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'tenantIds');
+
+  if (typeof name === 'undefined' && typeof imageUrl === 'undefined' && typeof defaultResourceKind === 'undefined' && typeof defaultAllowSeries === 'undefined' && typeof isDefault === 'undefined' && typeof sortOrder === 'undefined' && !hasTenantScope && !hasTenantIds) {
+    res.status(400).json({ error: 'validation', message: 'name, imageUrl, defaultResourceKind, defaultAllowSeries, isDefault, sortOrder, tenantScope or tenantIds must be provided' });
     return;
   }
 
@@ -4040,24 +4143,63 @@ app.patch('/admin/floorplans/:id', requireAdmin, async (req, res) => {
     return;
   }
 
+  if (typeof sortOrder !== 'undefined' && (!Number.isInteger(sortOrder) || sortOrder < 0)) {
+    res.status(400).json({ error: 'validation', message: 'sortOrder must be a non-negative integer' });
+    return;
+  }
+
+  const parsedTenantScope = hasTenantScope ? parseFloorplanTenantScope(tenantScope) : null;
+  if (hasTenantScope && !parsedTenantScope) {
+    res.status(400).json({ error: 'validation', message: 'tenantScope must be ALL or SELECTED' });
+    return;
+  }
+
+  if (hasTenantIds && !Array.isArray(tenantIds)) {
+    res.status(400).json({ error: 'validation', message: 'tenantIds must be an array' });
+    return;
+  }
+  const normalizedTenantIds = hasTenantIds && Array.isArray(tenantIds)
+    ? Array.from(new Set(tenantIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
+    : null;
+  if (parsedTenantScope === 'SELECTED' && (normalizedTenantIds?.length ?? 0) === 0) {
+    res.status(400).json({ error: 'validation', message: 'tenantIds must not be empty for SELECTED scope' });
+    return;
+  }
+
   try {
     const updatedFloorplan = await prisma.$transaction(async (tx) => {
       if (isDefault === true) {
         await tx.floorplan.updateMany({ where: { id: { not: id } }, data: { isDefault: false } });
       }
 
-      return tx.floorplan.update({
+      const updated = await tx.floorplan.update({
         where: { id },
         data: {
           ...(typeof name === 'string' ? { name: name.trim() } : {}),
           ...(typeof imageUrl === 'string' ? { imageUrl } : {}),
           ...(parsedDefaultKind ? { defaultResourceKind: parsedDefaultKind } : {}),
           ...(typeof defaultAllowSeries === 'boolean' ? { defaultAllowSeries } : {}),
-          ...(typeof isDefault === 'boolean' ? { isDefault } : {})
+          ...(typeof isDefault === 'boolean' ? { isDefault } : {}),
+          ...(typeof sortOrder === 'number' ? { sortOrder } : {}),
+          ...(parsedTenantScope ? { tenantScope: parsedTenantScope } : {})
         }
       });
+
+      if (parsedTenantScope === 'ALL') {
+        await tx.floorplanTenant.deleteMany({ where: { floorplanId: id } });
+      } else if (parsedTenantScope === 'SELECTED' || normalizedTenantIds !== null) {
+        await tx.floorplanTenant.deleteMany({ where: { floorplanId: id } });
+        if ((normalizedTenantIds?.length ?? 0) > 0) {
+          await tx.floorplanTenant.createMany({ data: normalizedTenantIds!.map((tenantId) => ({ floorplanId: id, tenantId })) });
+        }
+      }
+
+      return tx.floorplan.findUnique({ where: { id: updated.id }, include: { floorplanTenants: { select: { tenantId: true } } } });
     });
-    res.status(200).json(updatedFloorplan);
+    res.status(200).json({
+      ...updatedFloorplan,
+      tenantIds: updatedFloorplan?.floorplanTenants.map((entry) => entry.tenantId) ?? []
+    });
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
       res.status(404).json({ error: 'not_found', message: 'Floorplan not found' });
