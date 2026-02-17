@@ -4476,6 +4476,7 @@ app.delete('/recurring-bookings/:id', async (req, res) => {
 });
 
 // Catch-all route to serve index.html for client-side routing
+// This MUST be the last route to allow all API routes above to match first
 app.get('*', (_req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
 });

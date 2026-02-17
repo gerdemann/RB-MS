@@ -24,9 +24,9 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: postgresql://rbms:rbms_password@postgres:5432/rbms
-      JWT_SECRET: change-this-in-production
-      ADMIN_EMAIL: admin@example.com
-      ADMIN_PASSWORD: change-this-in-production
+      JWT_SECRET: REPLACE_WITH_SECURE_RANDOM_STRING
+      ADMIN_EMAIL: REPLACE_WITH_YOUR_ADMIN_EMAIL
+      ADMIN_PASSWORD: REPLACE_WITH_SECURE_PASSWORD
       APP_TITLE: RB-MS
       PORT: 3000
       RUN_SEED: "false"
