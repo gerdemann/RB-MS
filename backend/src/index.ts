@@ -1167,6 +1167,8 @@ const resolveEffectiveAllowSeries = (desk: { allowSeriesOverride: boolean | null
 );
 
 // Serve static frontend files
+// In Docker, frontend is built to /app/public during image build
+// __dirname points to /app/dist (compiled backend), so ../public resolves to /app/public
 const publicDir = path.join(__dirname, '..', 'public');
 app.use(express.static(publicDir));
 
