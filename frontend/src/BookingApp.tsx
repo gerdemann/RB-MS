@@ -311,6 +311,29 @@ const normalizeDeskBookings = (desk: OccupancyDesk): NormalizedOccupancyBooking[
   return normalizeDaySlotBookings(bookings);
 };
 
+const getRecurringMetadataForBooking = (desk: OccupancyDesk, booking: NormalizedOccupancyBooking): { recurringBookingId: string | null; recurringGroupId: string | null; isRecurring: boolean } => {
+  const rawBookings = desk.bookings && desk.bookings.length > 0 ? desk.bookings : desk.booking ? [desk.booking] : [];
+  const bookingIds = booking.sourceBookingIds?.length
+    ? booking.sourceBookingIds
+    : booking.id
+      ? [booking.id]
+      : [];
+
+  const matchingSources = bookingIds.length > 0
+    ? rawBookings.filter((item) => item.id && bookingIds.includes(item.id))
+    : [];
+
+  const recurringSource = matchingSources.find((item) => Boolean(item.recurringBookingId || item.recurringGroupId));
+  const recurringBookingId = recurringSource?.recurringBookingId ?? booking.recurringBookingId ?? null;
+  const recurringGroupId = recurringSource?.recurringGroupId ?? booking.recurringGroupId ?? null;
+
+  return {
+    recurringBookingId,
+    recurringGroupId,
+    isRecurring: Boolean(recurringBookingId || recurringGroupId)
+  };
+};
+
 const getDeskSlotAvailability = (desk?: OccupancyDesk | null): DeskSlotAvailability => {
   if (!desk) return 'FREE';
   const bookings = normalizeDeskBookings(desk);
@@ -1086,7 +1109,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           person: bookingDisplayName(booking),
           bookingId: booking.id,
           isCurrentUser,
-          isRecurring: booking.type === 'recurring',
+          isRecurring: Boolean(booking.recurringBookingId || booking.recurringGroupId || booking.type === 'recurring'),
           bookedFor: booking.bookedFor,
           userId: booking.userId,
           createdByEmployeeId: booking.createdByEmployeeId,
@@ -1308,10 +1331,9 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
 
       if (totalFreeHalfSlots <= 0) {
         nextAvailability.set(dayKey, 'none-free');
-      } else if (totalFreeHalfSlots < resourcesByFloorplan.length * 2) {
-        nextAvailability.set(dayKey, 'few-free');
       } else {
-        nextAvailability.set(dayKey, 'many-free');
+        const freeRatio = totalFreeHalfSlots / (resourcesByFloorplan.length * 2);
+        nextAvailability.set(dayKey, freeRatio <= 0.25 ? 'few-free' : 'many-free');
       }
     }
 
@@ -1658,13 +1680,15 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         : [];
     if (bookingIds.length === 0) return;
 
+    const recurringMeta = getRecurringMetadataForBooking(popupDesk, ownBooking);
+
     setCancelConfirmContext({
       ...deskPopup,
       bookingIds,
       bookingLabel: bookingSlotLabel(ownBooking),
-      recurringBookingId: ownBooking.recurringBookingId ?? null,
-      recurringGroupId: ownBooking.recurringGroupId ?? null,
-      isRecurring: normalizeDeskBookings(popupDesk).some((booking) => booking.isCurrentUser && (Boolean(booking.recurringBookingId) || Boolean(booking.recurringGroupId))),
+      recurringBookingId: recurringMeta.recurringBookingId,
+      recurringGroupId: recurringMeta.recurringGroupId,
+      isRecurring: recurringMeta.isRecurring,
       keepPopoverOpen: false
     });
     setCancelDialogError('');
