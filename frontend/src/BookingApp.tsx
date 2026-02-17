@@ -2,7 +2,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent, WheelEvent as ReactWheelEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { API_BASE, ApiError, checkBackendHealth, get, markBackendAvailable, post, put, resolveApiUrl } from './api';
-import { cancelBooking, createRoomBooking } from './api/bookings';
+import { cancelBooking, createRoomBooking, fetchBookingCancelPreview } from './api/bookings';
+import type { BookingCancelPreview } from './api/bookings';
 import { createMutationRequestId, logMutation, toBodySnippet } from './api/mutationLogger';
 import { Avatar } from './components/Avatar';
 import { BookingForm, createDefaultBookingFormValues } from './components/BookingForm';
@@ -108,6 +109,11 @@ type RecurringConflictState = {
 };
 type DeskPopupState = { deskId: string; anchorRect: DOMRect; openedAt: number };
 type CancelConfirmContext = DeskPopupState & { bookingIds: string[]; bookingLabel: string; recurringBookingId?: string | null; recurringGroupId?: string | null; isRecurring: boolean; keepPopoverOpen: boolean };
+type CancelSeriesPreviewState = {
+  loading: boolean;
+  details: BookingCancelPreview | null;
+  error: string;
+};
 type OccupancyBooking = NonNullable<OccupancyDesk['booking']>;
 type NormalizedOccupancyBooking = ReturnType<typeof normalizeDaySlotBookings<OccupancyBooking>>[number];
 type RoomAvailabilityBooking = { id: string; startTime: string | null; endTime: string | null; bookedFor?: 'SELF' | 'GUEST'; guestName?: string | null; employeeId?: string | null; userId?: string | null; user: { email?: string | null; name?: string | null; displayName?: string | null } | null; createdBy?: BookingActor; createdByUserId?: string; createdByEmployeeId?: string; recurringBookingId?: string | null; recurringGroupId?: string | null; type?: 'single' | 'recurring'; };
@@ -600,6 +606,11 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const [isCancellingBooking, setIsCancellingBooking] = useState(false);
   const [cancellingBookingId, setCancellingBookingId] = useState<string | null>(null);
   const [cancelDialogError, setCancelDialogError] = useState('');
+  const [cancelSeriesPreview, setCancelSeriesPreview] = useState<CancelSeriesPreviewState>({
+    loading: false,
+    details: null,
+    error: ''
+  });
   const [cancelDebugState, setCancelDebugState] = useState<CancelDebugState>({
     lastAction: 'IDLE',
     bookingId: null,
@@ -1277,6 +1288,16 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const cancelConfirmDesk = useMemo(() => (cancelConfirmContext ? desks.find((desk) => desk.id === cancelConfirmContext.deskId) ?? null : null), [desks, cancelConfirmContext]);
   const cancelConfirmBookingLabel = cancelConfirmContext?.bookingLabel ?? bookingSlotLabel(cancelConfirmDesk?.booking);
   const cancelConfirmIsSeries = Boolean(cancelConfirmContext?.recurringBookingId || cancelConfirmContext?.recurringGroupId);
+  const cancelSeriesPreviewCount = cancelSeriesPreview.details?.seriesBookingCount ?? null;
+  const recurrencePatternLabel = useMemo(() => {
+    const patternType = cancelSeriesPreview.details?.recurrence?.patternType;
+    if (!patternType) return '';
+    if (patternType === 'DAILY') return 'Täglich';
+    if (patternType === 'WEEKLY') return 'Wöchentlich';
+    if (patternType === 'MONTHLY') return 'Monatlich';
+    if (patternType === 'YEARLY') return 'Jährlich';
+    return '';
+  }, [cancelSeriesPreview.details?.recurrence?.patternType]);
   const calendarDays = useMemo(() => buildCalendarDays(visibleMonth), [visibleMonth]);
   const calendarRange = useMemo(() => ({
     from: toDateKey(calendarDays[0]),
@@ -1691,6 +1712,32 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       ...next
     }));
   }, []);
+
+  useEffect(() => {
+    const bookingId = cancelConfirmContext?.bookingIds[0];
+    if (cancelFlowState !== 'CANCEL_CONFIRM_OPEN' || !cancelConfirmIsSeries || !bookingId) {
+      setCancelSeriesPreview({ loading: false, details: null, error: '' });
+      return;
+    }
+
+    let cancelled = false;
+    setCancelSeriesPreview({ loading: true, details: null, error: '' });
+
+    void fetchBookingCancelPreview(bookingId)
+      .then((details) => {
+        if (cancelled) return;
+        setCancelSeriesPreview({ loading: false, details, error: '' });
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        const errorMessage = error instanceof Error ? error.message : 'Details zur Serie konnten nicht geladen werden.';
+        setCancelSeriesPreview({ loading: false, details: null, error: errorMessage });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [cancelConfirmContext?.bookingIds, cancelConfirmIsSeries, cancelFlowState]);
 
   const openCancelConfirm = () => {
     if (!deskPopup || !popupDesk || !canCancelHere) return;
@@ -2717,6 +2764,24 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
               ? <p>Wie möchtest du fortfahren?</p>
               : <p>Möchtest du deine Buchung {cancelConfirmBookingLabel} stornieren?</p>}
             <p className="muted cancel-booking-subline">{resourceKindLabel(cancelConfirmDesk.kind)}: {cancelConfirmDesk.name} · {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
+            {cancelConfirmIsSeries && (
+              <div className="cancel-series-preview muted">
+                {cancelSeriesPreview.loading && <p>Seriendetails werden geladen…</p>}
+                {!cancelSeriesPreview.loading && cancelSeriesPreview.error && <p>{cancelSeriesPreview.error}</p>}
+                {!cancelSeriesPreview.loading && !cancelSeriesPreview.error && cancelSeriesPreview.details && (
+                  <>
+                    <p>Beim Löschen der gesamten Serie werden voraussichtlich <strong>{cancelSeriesPreviewCount ?? 0}</strong> Termin(e) entfernt.</p>
+                    {cancelSeriesPreview.details.recurrence && (
+                      <p>
+                        Rhythmus: {recurrencePatternLabel}
+                        {cancelSeriesPreview.details.recurrence.interval > 1 ? ` (alle ${cancelSeriesPreview.details.recurrence.interval})` : ''}
+                        {' · '}Zeitraum: {new Date(cancelSeriesPreview.details.recurrence.startDate).toLocaleDateString('de-DE')} – {new Date(cancelSeriesPreview.details.recurrence.endDate).toLocaleDateString('de-DE')}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
             {cancelDialogError && <p className="error-banner">{cancelDialogError}</p>}
             {showRoomDebugInfo && (
               <div className="muted" style={{ fontSize: 12, border: '1px solid hsl(var(--border))', borderRadius: 8, padding: 8 }}>

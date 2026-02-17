@@ -2678,6 +2678,97 @@ app.delete('/bookings/:id', async (req, res) => {
   await cancelBookingByScope({ id, scope, req, res });
 });
 
+app.get('/bookings/:id/cancel-preview', async (req, res) => {
+  const id = getRouteId(req.params.id);
+  const requestId = req.requestId ?? 'unknown';
+  const userId = req.authUser?.id ?? null;
+
+  if (!id) {
+    res.status(400).json({ error: 'validation', message: 'id is required' });
+    return;
+  }
+
+  const existing = await prisma.booking.findUnique({
+    where: { id },
+    include: {
+      desk: { select: { kind: true } },
+      recurringBooking: {
+        select: {
+          id: true,
+          startDate: true,
+          endDate: true,
+          patternType: true,
+          interval: true
+        }
+      }
+    }
+  });
+
+  if (!existing) {
+    res.status(404).json({ error: 'not_found', message: 'Booking not found' });
+    return;
+  }
+
+  if (!req.authUser) {
+    res.status(401).json({ error: 'unauthorized', message: 'Authentication required' });
+    return;
+  }
+
+  let actorEmployee;
+  try {
+    actorEmployee = await requireActorEmployee(req);
+  } catch (error) {
+    const status = (error as Error & { status?: number }).status ?? 403;
+    console.warn('BOOKING_CANCEL_PREVIEW', { requestId, userId, bookingId: id, resourceType: existing.desk?.kind ?? null, status, error: (error as Error).message });
+    res.status(status).json({ error: status === 401 ? 'unauthorized' : 'forbidden', message: (error as Error).message });
+    return;
+  }
+
+  const allowed = canCancelBooking({
+    booking: {
+      bookedFor: existing.bookedFor,
+      employeeId: existing.employeeId,
+      createdByEmployeeId: existing.createdByEmployeeId
+    },
+    actor: {
+      employeeId: actorEmployee.id,
+      email: req.authUser.email,
+      isAdmin: req.authUser.role === 'admin'
+    }
+  });
+
+  if (!allowed) {
+    res.status(403).json({ code: 'FORBIDDEN', message: 'Not allowed to cancel this booking' });
+    return;
+  }
+
+  const seriesWhereClauses: Array<{ recurringBookingId?: string; recurringGroupId?: string }> = [];
+  if (existing.recurringBookingId) seriesWhereClauses.push({ recurringBookingId: existing.recurringBookingId });
+  if (existing.recurringGroupId) seriesWhereClauses.push({ recurringGroupId: existing.recurringGroupId });
+  const isSeries = seriesWhereClauses.length > 0;
+
+  const seriesBookingCount = isSeries
+    ? await prisma.booking.count({ where: { OR: seriesWhereClauses } })
+    : 1;
+
+  res.status(200).json({
+    bookingId: existing.id,
+    isSeries,
+    seriesBookingCount,
+    recurringBookingId: existing.recurringBookingId,
+    recurringGroupId: existing.recurringGroupId,
+    recurrence: existing.recurringBooking
+      ? {
+        id: existing.recurringBooking.id,
+        startDate: existing.recurringBooking.startDate,
+        endDate: existing.recurringBooking.endDate,
+        patternType: existing.recurringBooking.patternType,
+        interval: existing.recurringBooking.interval
+      }
+      : null
+  });
+});
+
 app.post('/bookings/:id/cancel', async (req, res) => {
   const id = getRouteId(req.params.id);
   if (!id) {
