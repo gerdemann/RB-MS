@@ -15,7 +15,7 @@ import { useToast } from './components/toast';
 import { normalizeDaySlotBookings } from './daySlotBookings';
 import { RESOURCE_KIND_OPTIONS, resourceKindLabel, type ResourceKind } from './resourceKinds';
 import { ROOM_WINDOW_END, ROOM_WINDOW_START, ROOM_WINDOW_TOTAL_MINUTES, clampInterval, formatMinutes, invertIntervals, mergeIntervals, toMinutes } from './lib/bookingWindows';
-import { computeRoomOccupancy } from './lib/roomOccupancy';
+import { computeRoomBusySegments, computeRoomOccupancy } from './lib/roomOccupancy';
 import { bookingDisplayName, canCancelBooking, isMineBooking } from './lib/bookingOwnership';
 import { getLastMutation, isDebugMode, setLastMutation } from './debug/runtimeDebug';
 
@@ -1089,7 +1089,12 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
   const popupRoomOccupancy = useMemo(() => computeRoomOccupancy(popupRoomBookingsForSelectedDay, selectedDate), [popupRoomBookingsForSelectedDay, selectedDate]);
   const popupRoomOccupiedIntervals = popupRoomOccupancy.intervals;
   const popupRoomFreeIntervals = popupRoomOccupancy.freeIntervals;
-  const popupRoomOccupiedSegments = popupRoomOccupancy.segments;
+  const popupRoomOccupiedSegments = useMemo(() => computeRoomBusySegments(popupRoomBookingsForSelectedDay, {
+    day: selectedDate,
+    start: ROOM_WINDOW_START,
+    end: ROOM_WINDOW_END,
+    isOwnBooking: (booking) => isMineBooking(booking, currentUser?.id)
+  }), [currentUser?.id, popupRoomBookingsForSelectedDay, selectedDate]);
   const popupRoomFreeSegments = popupRoomOccupancy.freeSegments;
   const popupRoomBookingsList = useMemo<RoomBookingListEntry[]>(() => {
     const rendered = popupRoomBookingsForSelectedDay
