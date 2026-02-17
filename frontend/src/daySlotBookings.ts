@@ -21,6 +21,13 @@ const getBookingDaySlot = (booking: DaySlotBookingShape): DaySlotValue | null =>
   return null;
 };
 
+const normalizeSingleBookingDaySlot = <T extends DaySlotBookingShape>(booking: T): NormalizedDaySlotBooking<T> => {
+  const daySlot = getBookingDaySlot(booking);
+  return daySlot ? { ...booking, daySlot } : { ...booking, daySlot: 'FULL' };
+};
+
+export const normalizeDaySlotBookingsPerEntry = <T extends DaySlotBookingShape>(bookings: T[]): NormalizedDaySlotBooking<T>[] => bookings.map((booking) => normalizeSingleBookingDaySlot(booking));
+
 const getBookingIdentity = (booking: DaySlotBookingShape, fallbackIndex: number): string => {
   if (booking.employeeId?.trim()) return `employee:${booking.employeeId.trim()}`;
   if (booking.userEmail?.trim()) return `email:${booking.userEmail.trim().toLowerCase()}`;
@@ -29,10 +36,7 @@ const getBookingIdentity = (booking: DaySlotBookingShape, fallbackIndex: number)
 
 export const normalizeDaySlotBookings = <T extends DaySlotBookingShape>(bookings: T[]): NormalizedDaySlotBooking<T>[] => {
   if (bookings.length <= 1) {
-    return bookings.map((booking) => {
-      const daySlot = getBookingDaySlot(booking);
-      return daySlot ? { ...booking, daySlot } : { ...booking, daySlot: 'FULL' };
-    });
+    return normalizeDaySlotBookingsPerEntry(bookings);
   }
 
   const fullBookings = bookings.filter((booking) => getBookingDaySlot(booking) === 'FULL');

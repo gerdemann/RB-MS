@@ -1,6 +1,6 @@
 import { CSSProperties, memo, useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { normalizeDaySlotBookings } from './daySlotBookings';
+import { normalizeDaySlotBookings, normalizeDaySlotBookingsPerEntry } from './daySlotBookings';
 import { resourceKindLabel } from './resourceKinds';
 import { BOOKABLE_END, BOOKABLE_START, ROOM_WINDOW_TOTAL_MINUTES } from './lib/bookingWindows';
 import { formatMinutes } from './lib/bookingWindows';
@@ -88,6 +88,7 @@ const getBookingPersonLabel = (booking?: FloorplanBooking): string => {
 
 const normalizeBookings = (desk: FloorplanDesk): FloorplanBooking[] => {
   const bookings = desk.bookings && desk.bookings.length > 0 ? desk.bookings : desk.booking ? [desk.booking] : [];
+  if (desk.kind === 'RAUM') return normalizeDaySlotBookingsPerEntry(bookings);
   return normalizeDaySlotBookings(bookings);
 };
 
