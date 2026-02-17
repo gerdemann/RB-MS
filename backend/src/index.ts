@@ -3,7 +3,7 @@ import { canCancelBooking } from './auth/bookingAuth';
 import express from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
-import { BookedFor, BookingSlot, DaySlot, Prisma, RecurrencePatternType, RecurringBooking, ResourceKind } from '@prisma/client';
+import { BookedFor, BookingSlot, DaySlot, DeskTenantScope, Prisma, RecurrencePatternType, RecurringBooking, ResourceKind } from '@prisma/client';
 import { prisma } from './prisma';
 import { expandRecurrence, MAX_SERIES_OCCURRENCES, type RecurrenceDefinition, validateRecurrenceDefinition } from './recurrence';
 
@@ -71,6 +71,7 @@ app.use((req, res, next) => {
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const RESOURCE_KINDS = new Set<ResourceKind>(['TISCH', 'PARKPLATZ', 'RAUM', 'SONSTIGES']);
+const DESK_TENANT_SCOPES = new Set<DeskTenantScope>(['ALL', 'SELECTED']);
 const BOOKED_FOR_VALUES = new Set<BookedFor>(['SELF', 'GUEST']);
 const RECURRENCE_PATTERN_VALUES = new Set<RecurrencePatternType>(['DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY']);
 const SERIES_BOOKING_CHUNK_SIZE = 100;
@@ -79,6 +80,12 @@ const parseResourceKind = (value: unknown): ResourceKind | null => {
   if (typeof value !== 'string') return null;
   const normalized = value.trim().toUpperCase() as ResourceKind;
   return RESOURCE_KINDS.has(normalized) ? normalized : null;
+};
+
+const parseDeskTenantScope = (value: unknown): DeskTenantScope | null => {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toUpperCase() as DeskTenantScope;
+  return DESK_TENANT_SCOPES.has(normalized) ? normalized : null;
 };
 
 const parseBookedFor = (value: unknown): BookedFor => {
@@ -841,6 +848,14 @@ const sendConflict = (res: express.Response, message: string, details: Record<st
 };
 
 const normalizeEmail = (value: string): string => value.trim().toLowerCase();
+const normalizeTenantDomain = (value: string): string => value.trim().toLowerCase().replace(/^@+/, '');
+const extractDomainFromEmail = (email: string): string | null => {
+  const normalizedEmail = normalizeEmail(email);
+  const atIndex = normalizedEmail.lastIndexOf('@');
+  if (atIndex < 0 || atIndex >= normalizedEmail.length - 1) return null;
+  const domain = normalizeTenantDomain(normalizedEmail.slice(atIndex + 1));
+  return domain.length > 0 ? domain : null;
+};
 const hashPassword = async (value: string): Promise<string> => bcrypt.hash(value, PASSWORD_SALT_ROUNDS);
 
 type BookingTx = Prisma.TransactionClient;
@@ -897,7 +912,7 @@ const findBookingIdentity = async (userEmail: string): Promise<BookingIdentity> 
 };
 
 
-const requireActorEmployee = async (req: express.Request): Promise<{ id: string; displayName: string; email: string; role: EmployeeRole }> => {
+const requireActorEmployee = async (req: express.Request): Promise<{ id: string; displayName: string; email: string; role: EmployeeRole; tenantDomainId?: string | null }> => {
   if (!req.authUser) {
     const error = new Error('Authentication required');
     (error as Error & { status?: number }).status = 401;
@@ -909,14 +924,15 @@ const requireActorEmployee = async (req: express.Request): Promise<{ id: string;
       id: req.authUser.id,
       displayName: req.authUser.displayName,
       email: req.authUser.email,
-      role: req.authUser.role
+      role: req.authUser.role,
+      tenantDomainId: null
     };
   }
 
   const normalizedEmail = normalizeEmail(req.authUser.email);
   const employee = req.authSession?.employeeId
-    ? await prisma.employee.findUnique({ where: { id: req.authSession.employeeId }, select: { id: true, displayName: true, email: true, role: true, isActive: true } })
-    : await prisma.employee.findUnique({ where: { email: normalizedEmail }, select: { id: true, displayName: true, email: true, role: true, isActive: true } });
+    ? await prisma.employee.findUnique({ where: { id: req.authSession.employeeId }, select: { id: true, displayName: true, email: true, role: true, isActive: true, tenantDomainId: true } })
+    : await prisma.employee.findUnique({ where: { email: normalizedEmail }, select: { id: true, displayName: true, email: true, role: true, isActive: true, tenantDomainId: true } });
 
   if (!employee || !employee.isActive) {
     if (AUTH_BYPASS_ENABLED && req.authUser.source === 'local') {
@@ -924,7 +940,8 @@ const requireActorEmployee = async (req: express.Request): Promise<{ id: string;
         id: req.authUser.id,
         displayName: req.authUser.displayName,
         email: req.authUser.email,
-        role: req.authUser.role
+        role: req.authUser.role,
+        tenantDomainId: null
       };
     }
 
@@ -937,7 +954,8 @@ const requireActorEmployee = async (req: express.Request): Promise<{ id: string;
     id: employee.id,
     displayName: employee.displayName,
     email: employee.email,
-    role: employee.role === 'admin' ? 'admin' : 'user'
+    role: employee.role === 'admin' ? 'admin' : 'user',
+    tenantDomainId: employee.tenantDomainId
   };
 };
 
@@ -1172,12 +1190,18 @@ const getActiveEmployeesByEmail = async (emails: string[]) => {
 
 const getDeskContext = async (deskId: string) => prisma.desk.findUnique({
   where: { id: deskId },
-  select: { id: true, name: true, floorplanId: true, kind: true, allowSeriesOverride: true, floorplan: { select: { defaultAllowSeries: true } } }
+  select: { id: true, name: true, floorplanId: true, kind: true, allowSeriesOverride: true, tenantScope: true, deskTenants: { select: { tenantId: true } }, floorplan: { select: { defaultAllowSeries: true } } }
 });
 
 const resolveEffectiveAllowSeries = (desk: { allowSeriesOverride: boolean | null; floorplan?: { defaultAllowSeries: boolean } | null }): boolean => (
   desk.allowSeriesOverride ?? desk.floorplan?.defaultAllowSeries ?? true
 );
+
+const isDeskBookableForTenant = (desk: { tenantScope: DeskTenantScope; deskTenants?: Array<{ tenantId: string }> }, tenantDomainId?: string | null): boolean => {
+  if (desk.tenantScope === 'ALL') return true;
+  if (!tenantDomainId) return false;
+  return (desk.deskTenants ?? []).some((entry) => entry.tenantId === tenantDomainId);
+};
 
 
 app.get('/health', async (_req, res) => {
@@ -1254,8 +1278,17 @@ const backfillLegacyBookingCreators = async () => {
 
 const upsertEmployeeFromEntraLogin = async (claims: { oid: string; tid: string; email: string; name: string }) => {
   const normalizedEmail = normalizeEmail(claims.email);
+  const domain = extractDomainFromEmail(normalizedEmail);
 
   return prisma.$transaction(async (tx) => {
+    const tenant = domain
+      ? await tx.tenant.upsert({
+        where: { domain },
+        update: {},
+        create: { domain, name: domain }
+      })
+      : null;
+
     let employee = await tx.employee.findFirst({
       where: { OR: [{ entraOid: claims.oid }, { email: normalizedEmail }] }
     });
@@ -1268,7 +1301,8 @@ const upsertEmployeeFromEntraLogin = async (claims: { oid: string; tid: string; 
           role: 'user',
           isActive: true,
           entraOid: claims.oid,
-          tenantId: claims.tid,
+          entraTenantId: claims.tid,
+          tenantDomainId: tenant?.id ?? null,
           lastLoginAt: new Date()
         }
       });
@@ -1279,7 +1313,8 @@ const upsertEmployeeFromEntraLogin = async (claims: { oid: string; tid: string; 
           email: normalizedEmail,
           displayName: claims.name,
           entraOid: claims.oid,
-          tenantId: claims.tid,
+          entraTenantId: claims.tid,
+          tenantDomainId: tenant?.id ?? null,
           lastLoginAt: new Date(),
           isActive: true
         }
@@ -1919,6 +1954,105 @@ app.delete('/admin/employees/:id', requireAdmin, async (req, res) => {
   }
 });
 
+
+app.get('/admin/tenants', requireAdmin, async (_req, res) => {
+  const tenants = await prisma.tenant.findMany({
+    orderBy: { domain: 'asc' },
+    include: { _count: { select: { employees: true } } }
+  });
+
+  res.status(200).json(tenants.map((tenant) => ({
+    id: tenant.id,
+    domain: tenant.domain,
+    name: tenant.name,
+    createdAt: tenant.createdAt,
+    updatedAt: tenant.updatedAt,
+    employeeCount: tenant._count.employees
+  })));
+});
+
+app.post('/admin/tenants', requireAdmin, async (req, res) => {
+  const rawDomain = typeof req.body?.domain === 'string' ? req.body.domain : '';
+  const domain = normalizeTenantDomain(rawDomain);
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : undefined;
+
+  if (!domain || !domain.includes('.')) {
+    res.status(400).json({ error: 'validation', message: 'domain must be a valid domain' });
+    return;
+  }
+
+  try {
+    const created = await prisma.tenant.create({ data: { domain, name: name || domain } });
+    res.status(201).json(created);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      res.status(409).json({ error: 'conflict', message: 'Tenant domain already exists' });
+      return;
+    }
+    throw error;
+  }
+});
+
+app.patch('/admin/tenants/:id', requireAdmin, async (req, res) => {
+  const id = getRouteId(req.params.id);
+  if (!id) {
+    res.status(400).json({ error: 'validation', message: 'id is required' });
+    return;
+  }
+
+  const rawDomain = typeof req.body?.domain === 'string' ? req.body.domain : undefined;
+  const name = typeof req.body?.name === 'string' ? req.body.name.trim() : undefined;
+
+  if (typeof rawDomain === 'undefined' && typeof name === 'undefined') {
+    res.status(400).json({ error: 'validation', message: 'name or domain must be provided' });
+    return;
+  }
+
+  const domain = typeof rawDomain === 'string' ? normalizeTenantDomain(rawDomain) : undefined;
+  if (typeof domain === 'string' && (!domain || !domain.includes('.'))) {
+    res.status(400).json({ error: 'validation', message: 'domain must be a valid domain' });
+    return;
+  }
+
+  try {
+    const updated = await prisma.tenant.update({
+      where: { id },
+      data: {
+        ...(typeof domain === 'string' ? { domain } : {}),
+        ...(typeof name === 'string' ? { name: name || null } : {})
+      }
+    });
+    res.status(200).json(updated);
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      res.status(409).json({ error: 'conflict', message: 'Tenant domain already exists' });
+      return;
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+      res.status(404).json({ error: 'not_found', message: 'Tenant not found' });
+      return;
+    }
+    throw error;
+  }
+});
+
+app.delete('/admin/tenants/:id', requireAdmin, async (req, res) => {
+  const id = getRouteId(req.params.id);
+  if (!id) {
+    res.status(400).json({ error: 'validation', message: 'id is required' });
+    return;
+  }
+
+  const employeeCount = await prisma.employee.count({ where: { tenantDomainId: id } });
+  if (employeeCount > 0) {
+    res.status(409).json({ error: 'conflict', message: 'Tenant is assigned to employees' });
+    return;
+  }
+
+  await prisma.tenant.delete({ where: { id } });
+  res.status(204).send();
+});
+
 app.get('/me', (req, res) => {
   res.status(200).json({
     id: req.authUser?.id,
@@ -1945,9 +2079,16 @@ app.get('/floorplans/:id', async (req, res) => {
 });
 
 app.get('/floorplans/:id/desks', async (req, res) => {
+  let actorTenantDomainId: string | null = null;
+  try {
+    actorTenantDomainId = (await requireActorEmployee(req)).tenantDomainId ?? null;
+  } catch {
+    actorTenantDomainId = null;
+  }
+
   const desks = await prisma.desk.findMany({
     where: { floorplanId: req.params.id },
-    include: { floorplan: { select: { defaultAllowSeries: true } } },
+    include: { floorplan: { select: { defaultAllowSeries: true } }, deskTenants: { select: { tenantId: true } } },
     orderBy: { createdAt: 'asc' }
   });
 
@@ -1958,6 +2099,9 @@ app.get('/floorplans/:id/desks', async (req, res) => {
     kind: desk.kind,
     allowSeriesOverride: desk.allowSeriesOverride,
     effectiveAllowSeries: resolveEffectiveAllowSeries(desk),
+    tenantScope: desk.tenantScope,
+    tenantIds: desk.deskTenants.map((entry) => entry.tenantId),
+    isBookableForMe: isDeskBookableForTenant(desk, actorTenantDomainId),
     position: desk.x === null || desk.y === null ? null : { x: desk.x, y: desk.y },
     x: desk.x,
     y: desk.y,
@@ -2022,6 +2166,11 @@ app.post('/bookings', async (req, res) => {
   const desk = await getDeskContext(deskId);
   if (!desk) {
     res.status(404).json({ error: 'not_found', message: 'Desk not found' });
+    return;
+  }
+
+  if (!isDeskBookableForTenant(desk, actorEmployee.tenantDomainId)) {
+    res.status(403).json({ error: 'forbidden', message: 'Für deinen Mandanten nicht buchbar' });
     return;
   }
 
@@ -2173,6 +2322,11 @@ app.put('/bookings/:id', async (req, res) => {
   const nextDesk = await getDeskContext(deskId);
   if (!nextDesk) {
     res.status(404).json({ error: 'not_found', message: 'Desk not found' });
+    return;
+  }
+
+  if (!isDeskBookableForTenant(nextDesk, actorEmployee.tenantDomainId)) {
+    res.status(403).json({ error: 'forbidden', message: 'Für deinen Mandanten nicht buchbar' });
     return;
   }
 
@@ -2804,9 +2958,16 @@ app.get('/occupancy', async (req, res) => {
     return;
   }
 
+  let actorTenantDomainId: string | null = null;
+  try {
+    actorTenantDomainId = (await requireActorEmployee(req)).tenantDomainId ?? null;
+  } catch {
+    actorTenantDomainId = null;
+  }
+
   const desks = await prisma.desk.findMany({
     where: { floorplanId },
-    include: { floorplan: { select: { defaultAllowSeries: true } } },
+    include: { floorplan: { select: { defaultAllowSeries: true } }, deskTenants: { select: { tenantId: true } } },
     orderBy: { createdAt: 'asc' }
   });
 
@@ -2856,6 +3017,9 @@ app.get('/occupancy', async (req, res) => {
       y: desk.y,
       allowSeriesOverride: desk.allowSeriesOverride,
       effectiveAllowSeries: resolveEffectiveAllowSeries(desk),
+      tenantScope: desk.tenantScope,
+      tenantIds: desk.deskTenants.map((entry) => entry.tenantId),
+      isBookableForMe: isDeskBookableForTenant(desk, actorTenantDomainId),
       status: normalizedBookings.length > 0 ? 'booked' as const : 'free' as const,
       booking: primaryBooking,
       bookings: normalizedBookings
@@ -3930,8 +4094,9 @@ app.post('/admin/floorplans/:id/desks', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
+  const { name, x, y, kind, allowSeriesOverride, tenantScope, tenantIds } = req.body as { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null; tenantScope?: DeskTenantScope; tenantIds?: string[] };
   const parsedKind = typeof kind === 'undefined' ? null : parseResourceKind(kind);
+  const parsedTenantScope = typeof tenantScope === 'undefined' ? 'ALL' : parseDeskTenantScope(tenantScope);
 
   if (!name) {
     res.status(400).json({ error: 'validation', message: 'name is required' });
@@ -3963,21 +4128,41 @@ app.post('/admin/floorplans/:id/desks', requireAdmin, async (req, res) => {
     return;
   }
 
+  if (!parsedTenantScope) {
+    res.status(400).json({ error: 'validation', message: 'tenantScope must be ALL or SELECTED' });
+    return;
+  }
+
+  const normalizedTenantIds = Array.isArray(tenantIds) ? Array.from(new Set(tenantIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0))) : [];
+  if (parsedTenantScope === 'SELECTED' && normalizedTenantIds.length === 0) {
+    res.status(400).json({ error: 'validation', message: 'tenantIds must not be empty for SELECTED scope' });
+    return;
+  }
+
   const floorplan = await prisma.floorplan.findUnique({ where: { id }, select: { id: true, defaultResourceKind: true } });
   if (!floorplan) {
     res.status(404).json({ error: 'not_found', message: 'Floorplan not found' });
     return;
   }
 
-  const desk = await prisma.desk.create({
-    data: {
-      floorplanId: id,
-      name: name.slice(0, 60),
-      x: typeof x === 'undefined' ? null : x,
-      y: typeof y === 'undefined' ? null : y,
-      kind: parsedKind ?? floorplan.defaultResourceKind,
-      ...(typeof allowSeriesOverride !== 'undefined' ? { allowSeriesOverride } : {})
+  const desk = await prisma.$transaction(async (tx) => {
+    const created = await tx.desk.create({
+      data: {
+        floorplanId: id,
+        name: name.slice(0, 60),
+        x: typeof x === 'undefined' ? null : x,
+        y: typeof y === 'undefined' ? null : y,
+        kind: parsedKind ?? floorplan.defaultResourceKind,
+        tenantScope: parsedTenantScope,
+        ...(typeof allowSeriesOverride !== 'undefined' ? { allowSeriesOverride } : {})
+      }
+    });
+
+    if (parsedTenantScope === 'SELECTED') {
+      await tx.deskTenant.createMany({ data: normalizedTenantIds.map((tenantId) => ({ deskId: created.id, tenantId })) });
     }
+
+    return tx.desk.findUnique({ where: { id: created.id }, include: { deskTenants: { select: { tenantId: true } } } });
   });
   res.status(201).json(desk);
 });
@@ -4019,7 +4204,7 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const { name, x, y, kind, allowSeriesOverride } = req.body as { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null };
+  const { name, x, y, kind, allowSeriesOverride, tenantScope, tenantIds } = req.body as { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null; tenantScope?: DeskTenantScope; tenantIds?: string[] };
   const hasName = typeof name !== 'undefined';
   const hasX = typeof x !== 'undefined';
   const hasY = typeof y !== 'undefined';
@@ -4027,9 +4212,12 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
   const parsedKind = hasKind ? parseResourceKind(kind) : null;
 
   const hasAllowSeriesOverride = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'allowSeriesOverride');
+  const hasTenantScope = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'tenantScope');
+  const hasTenantIds = Object.prototype.hasOwnProperty.call(req.body ?? {}, 'tenantIds');
+  const parsedTenantScope = hasTenantScope ? parseDeskTenantScope(tenantScope) : null;
 
-  if (!hasName && !hasX && !hasY && !hasKind && !hasAllowSeriesOverride) {
-    res.status(400).json({ error: 'validation', message: 'name, x, y, kind or allowSeriesOverride must be provided' });
+  if (!hasName && !hasX && !hasY && !hasKind && !hasAllowSeriesOverride && !hasTenantScope && !hasTenantIds) {
+    res.status(400).json({ error: 'validation', message: 'name, x, y, kind, allowSeriesOverride, tenantScope or tenantIds must be provided' });
     return;
   }
 
@@ -4064,15 +4252,39 @@ app.patch('/admin/desks/:id', requireAdmin, async (req, res) => {
     return;
   }
 
-  const data: { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null } = {};
+  if (hasTenantScope && !parsedTenantScope) {
+    res.status(400).json({ error: 'validation', message: 'tenantScope must be ALL or SELECTED' });
+    return;
+  }
+
+  const normalizedTenantIds = hasTenantIds && Array.isArray(tenantIds)
+    ? Array.from(new Set(tenantIds.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
+    : [];
+  const effectiveScope = hasTenantScope ? parsedTenantScope : undefined;
+  if ((effectiveScope === 'SELECTED' || (!hasTenantScope && hasTenantIds)) && normalizedTenantIds.length === 0) {
+    res.status(400).json({ error: 'validation', message: 'tenantIds must not be empty for SELECTED scope' });
+    return;
+  }
+
+  const data: { name?: string; x?: number | null; y?: number | null; kind?: ResourceKind; allowSeriesOverride?: boolean | null; tenantScope?: DeskTenantScope } = {};
   if (hasName) data.name = name.trim().slice(0, 60);
   if (hasX) data.x = x;
   if (hasY) data.y = y;
   if (hasKind && parsedKind) data.kind = parsedKind;
   if (hasAllowSeriesOverride) data.allowSeriesOverride = allowSeriesOverride ?? null;
+  if (hasTenantScope && parsedTenantScope) data.tenantScope = parsedTenantScope;
 
   try {
-    const updatedDesk = await prisma.desk.update({ where: { id }, data });
+    const updatedDesk = await prisma.$transaction(async (tx) => {
+      const updated = await tx.desk.update({ where: { id }, data });
+      if ((hasTenantScope && parsedTenantScope === 'ALL') || hasTenantIds) {
+        await tx.deskTenant.deleteMany({ where: { deskId: id } });
+      }
+      if ((hasTenantScope && parsedTenantScope === 'SELECTED') || (!hasTenantScope && hasTenantIds)) {
+        await tx.deskTenant.createMany({ data: normalizedTenantIds.map((tenantId) => ({ deskId: id, tenantId })) });
+      }
+      return tx.desk.findUnique({ where: { id: updated.id }, include: { deskTenants: { select: { tenantId: true } } } });
+    });
     res.status(200).json(updatedDesk);
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {

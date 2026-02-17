@@ -43,6 +43,7 @@ type FloorplanDesk = {
   isCurrentUsersDesk?: boolean;
   isHighlighted?: boolean;
   isSelected?: boolean;
+  isBookableForMe?: boolean;
 };
 const PIN_HITBOX_SIZE = 44;
 const PIN_VISUAL_SIZE = 36;
@@ -148,7 +149,9 @@ const DeskOverlay = memo(function DeskOverlay({ markers, selectedDeskId, hovered
           const amBooking = fullBooking ?? bookings.find((booking) => slotFromBooking(booking) === 'AM');
           const pmBooking = fullBooking ?? bookings.find((booking) => slotFromBooking(booking) === 'PM');
           const isInteracting = selectedDeskId === desk.id || hoveredDeskId === desk.id || Boolean(desk.isSelected);
-          const isClickable = !(amBooking && pmBooking && !bookings.some((booking) => booking.isCurrentUser));
+          const isOccupiedByOthers = amBooking && pmBooking && !bookings.some((booking) => booking.isCurrentUser);
+          const isTenantBlocked = desk.isBookableForMe === false;
+          const isClickable = isTenantBlocked ? true : !isOccupiedByOthers;
           const centerBooking = fullBooking ?? bookings[0];
           const initials = getInitials(centerBooking?.userDisplayName, centerBooking?.userEmail ?? undefined);
           const hasPhoto = Boolean(centerBooking?.userPhotoUrl);
@@ -187,7 +190,7 @@ const DeskOverlay = memo(function DeskOverlay({ markers, selectedDeskId, hovered
               ref={(element) => onDeskAnchorChange?.(desk.id, element)}
               type="button"
               data-desk-id={desk.id}
-              className={`desk-pin ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''} ${desk.isCurrentUsersDesk ? 'is-own-desk' : ''} ${desk.isHighlighted ? 'is-highlighted' : ''} ${desk.isSelected ? 'is-selected' : ''} ${!isClickable ? 'is-click-disabled' : ''}`}
+              className={`desk-pin ${selectedDeskId === desk.id ? 'selected' : ''} ${hoveredDeskId === desk.id ? 'hovered' : ''} ${desk.isCurrentUsersDesk ? 'is-own-desk' : ''} ${desk.isHighlighted ? 'is-highlighted' : ''} ${desk.isSelected ? 'is-selected' : ''} ${!isClickable ? 'is-click-disabled' : ''} ${isTenantBlocked ? 'is-not-bookable' : ''}`}
               data-free={shouldShowPulse ? 'true' : 'false'}
               style={{
                 left: `${xPct}%`,
@@ -217,7 +220,7 @@ const DeskOverlay = memo(function DeskOverlay({ markers, selectedDeskId, hovered
                 onDeskDoubleClick?.(desk.id);
               }}
               tabIndex={0}
-              aria-disabled={!isClickable}
+              aria-disabled={!isClickable || isTenantBlocked}
               title={bookings.length === 2 && !fullBooking ? '2 Buchungen' : undefined}
               data-debug-state={debugEnabled ? JSON.stringify({
                 resourceId: desk.id,
