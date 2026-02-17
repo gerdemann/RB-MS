@@ -3,6 +3,7 @@ import { canCancelBooking } from './auth/bookingAuth';
 import express from 'express';
 import crypto from 'crypto';
 import bcrypt from 'bcryptjs';
+import path from 'path';
 import { BookedFor, BookingSlot, DaySlot, Prisma, RecurrencePatternType, RecurringBooking, ResourceKind } from '@prisma/client';
 import { prisma } from './prisma';
 import { expandRecurrence, MAX_RECURRING_OCCURRENCES, type RecurrenceDefinition, validateRecurrenceDefinition } from './recurrence';
@@ -1165,6 +1166,9 @@ const resolveEffectiveAllowSeries = (desk: { allowSeriesOverride: boolean | null
   desk.allowSeriesOverride ?? desk.floorplan?.defaultAllowSeries ?? true
 );
 
+// Serve static frontend files
+const publicDir = path.join(__dirname, '..', 'public');
+app.use(express.static(publicDir));
 
 app.get('/health', async (_req, res) => {
   try {
@@ -4469,6 +4473,11 @@ app.delete('/recurring-bookings/:id', async (req, res) => {
   });
 
   res.status(204).send();
+});
+
+// Catch-all route to serve index.html for client-side routing
+app.get('*', (_req, res) => {
+  res.sendFile(path.join(publicDir, 'index.html'));
 });
 
 const start = async () => {

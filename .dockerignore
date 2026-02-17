@@ -1,0 +1,17 @@
+node_modules
+.git
+.gitignore
+*.log
+.DS_Store
+.env
+.env.*
+dist
+*.md
+.github
+docs
+infra
+render.yaml
+backend/dist
+backend/node_modules
+frontend/dist
+frontend/node_modules
