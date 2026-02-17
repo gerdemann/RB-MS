@@ -4,7 +4,7 @@ import { normalizeDaySlotBookings } from './daySlotBookings';
 import { resourceKindLabel } from './resourceKinds';
 import { BOOKABLE_END, BOOKABLE_START, ROOM_WINDOW_TOTAL_MINUTES } from './lib/bookingWindows';
 import { formatMinutes } from './lib/bookingWindows';
-import { computeRoomOccupancy } from './lib/roomOccupancy';
+import { computeRoomBusySegments, computeRoomOccupancy } from './lib/roomOccupancy';
 import { FloorplanFlatRenderer, FloorplanRect, ResolvedFlatResource } from './FloorplanFlatRenderer';
 import { NonRoomDaySlotRing } from './components/NonRoomDaySlotRing';
 import { RoomBusinessDayRing } from './components/RoomBusinessDayRing';
@@ -165,7 +165,14 @@ const DeskOverlay = memo(function DeskOverlay({ markers, selectedDeskId, hovered
 
           const roomOccupancy = isRoom ? computeRoomOccupancy(bookings, selectedDate, BOOKABLE_START, BOOKABLE_END) : null;
           const roomIntervals = roomOccupancy?.intervals ?? [];
-          const roomSegments = roomOccupancy?.segments ?? [];
+          const roomSegments = isRoom
+            ? computeRoomBusySegments(bookings, {
+                day: selectedDate,
+                start: BOOKABLE_START,
+                end: BOOKABLE_END,
+                isOwnBooking: (booking) => Boolean(booking.isCurrentUser)
+              })
+            : [];
           const roomFreeSegments = roomOccupancy?.freeSegments ?? [];
           const roomCoverage = roomOccupancy?.occupiedMinutes ?? 0;
           const roomFreeMinutes = roomOccupancy?.freeMinutes ?? 0;

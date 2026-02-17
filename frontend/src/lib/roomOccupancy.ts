@@ -7,6 +7,8 @@ type RoomOccupancyBooking = {
   endTime?: string | null;
 };
 
+export type RoomBusySegment = RingSegment & { tone: 'own' | 'other' };
+
 const HHMM_PATTERN = /^\d{2}:\d{2}$/;
 
 const toLocalDateKey = (value: Date): string => {
@@ -99,3 +101,73 @@ export const computeRoomOccupancySegments = (
   start = BOOKABLE_START,
   end = BOOKABLE_END
 ): RingSegment[] => computeRoomOccupancy(bookings, day, start, end).segments;
+
+const normalizeWindowMinutes = (start: string, end: string): { winStart: number; winEnd: number; windowMinutes: number } => {
+  const useDefaultWindow = start === BOOKABLE_START && end === BOOKABLE_END;
+  const winStart = useDefaultWindow ? BUSINESS_START_MINUTES : toMinutes(start);
+  const winEnd = useDefaultWindow ? BUSINESS_END_MINUTES : toMinutes(end);
+  return {
+    winStart,
+    winEnd,
+    windowMinutes: Math.max(0, winEnd - winStart)
+  };
+};
+
+export const computeRoomBusySegments = <TBooking extends RoomOccupancyBooking>(
+  bookings: TBooking[],
+  options?: {
+    day?: string;
+    start?: string;
+    end?: string;
+    isOwnBooking?: (booking: TBooking) => boolean;
+  }
+): RoomBusySegment[] => {
+  const day = options?.day;
+  const start = options?.start ?? BOOKABLE_START;
+  const end = options?.end ?? BOOKABLE_END;
+  const { winStart, winEnd, windowMinutes } = normalizeWindowMinutes(start, end);
+  if (!Number.isFinite(winStart) || !Number.isFinite(winEnd) || windowMinutes <= 0) return [];
+
+  const normalized = bookings.flatMap((booking) => {
+    if (!bookingBelongsToDay(booking, day)) return [];
+    const startMinutes = parseMinutes(booking.startTime);
+    const endMinutes = parseMinutes(booking.endTime);
+    if (startMinutes === null || endMinutes === null || endMinutes <= startMinutes) return [];
+    const clamped = clampInterval({ startMin: startMinutes, endMin: endMinutes }, winStart, winEnd);
+    if (!clamped) return [];
+    return [{ ...clamped, tone: options?.isOwnBooking?.(booking) ? 'own' as const : 'other' as const }];
+  });
+  if (normalized.length === 0) return [];
+
+  const bounds = Array.from(new Set(normalized.flatMap((interval) => [interval.startMin, interval.endMin]))).sort((a, b) => a - b);
+  const rawSegments: RoomBusySegment[] = [];
+
+  for (let index = 0; index < bounds.length - 1; index += 1) {
+    const startMin = bounds[index];
+    const endMin = bounds[index + 1];
+    if (endMin <= startMin) continue;
+    const covering = normalized.filter((interval) => interval.startMin < endMin && interval.endMin > startMin);
+    if (covering.length === 0) continue;
+
+    rawSegments.push({
+      p0: (startMin - winStart) / windowMinutes,
+      p1: (endMin - winStart) / windowMinutes,
+      tone: covering.some((interval) => interval.tone === 'own') ? 'own' : 'other'
+    });
+  }
+
+  if (rawSegments.length === 0) return [];
+
+  const merged: RoomBusySegment[] = [rawSegments[0]];
+  for (let index = 1; index < rawSegments.length; index += 1) {
+    const segment = rawSegments[index];
+    const previous = merged[merged.length - 1];
+    if (segment.tone === previous.tone && Math.abs(segment.p0 - previous.p1) < 0.000001) {
+      previous.p1 = segment.p1;
+      continue;
+    }
+    merged.push(segment);
+  }
+
+  return merged;
+};

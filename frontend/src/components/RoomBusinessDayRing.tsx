@@ -1,6 +1,8 @@
 import type { RingSegment } from '../lib/bookingWindows';
 import { BUSINESS_START_ANGLE_DEGREES, BUSINESS_SWEEP_DEGREES, NIGHT_SWEEP_DEGREES, progressToBusinessAngleDegrees, toBusinessAngleDegrees } from '../lib/roomBusinessDayRing';
 
+type BusySegment = RingSegment & { tone?: 'own' | 'other' };
+
 type RingTick = 'start' | 'twelve' | 'end';
 
 const VIEWBOX_SIZE = 100;
@@ -48,7 +50,7 @@ export function RoomBusinessDayRing({
   showTicks = true,
   debugTitle
 }: {
-  segments: RingSegment[];
+  segments: BusySegment[];
   freeSegments?: RingSegment[];
   label?: string;
   className?: string;
@@ -56,6 +58,8 @@ export function RoomBusinessDayRing({
   showTicks?: boolean;
   debugTitle?: string;
 }) {
+  const bookedStrokeColor = (segment: BusySegment): string => (segment.tone === 'own' ? 'var(--resource-own)' : 'var(--resource-busy)');
+
   const businessStart = BUSINESS_START_ANGLE_DEGREES;
   const businessEnd = businessStart + BUSINESS_SWEEP_DEGREES;
   const nightStart = businessEnd;
@@ -120,7 +124,7 @@ export function RoomBusinessDayRing({
               r={RADIUS}
               className="room-business-ring-booked"
               style={{ strokeWidth }}
-              stroke="var(--resource-busy)"
+              stroke={bookedStrokeColor(segment)}
               aria-hidden="true"
             />
           );
@@ -131,7 +135,7 @@ export function RoomBusinessDayRing({
             d={segmentPath(progressToBusinessAngleDegrees(segment.p0), progressToBusinessAngleDegrees(segment.p1))}
             className="room-business-ring-booked"
             style={{ strokeWidth }}
-            stroke="var(--resource-busy)"
+            stroke={bookedStrokeColor(segment)}
             aria-hidden="true"
           />
         );
