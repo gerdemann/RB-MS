@@ -12,7 +12,7 @@ import { FloorplanCanvas } from './FloorplanCanvas';
 import { APP_TITLE, APP_VERSION, COMPANY_LOGO_URL } from './config';
 import type { AuthUser } from './auth/AuthProvider';
 import { useToast } from './components/toast';
-import { normalizeDaySlotBookings } from './daySlotBookings';
+import { normalizeDaySlotBookings, normalizeDaySlotBookingsPerEntry } from './daySlotBookings';
 import { RESOURCE_KIND_OPTIONS, resourceKindLabel, type ResourceKind } from './resourceKinds';
 import { ROOM_WINDOW_END, ROOM_WINDOW_START, ROOM_WINDOW_TOTAL_MINUTES, clampInterval, formatMinutes, invertIntervals, mergeIntervals, toMinutes } from './lib/bookingWindows';
 import { computeRoomBusySegments, computeRoomOccupancy } from './lib/roomOccupancy';
@@ -308,6 +308,7 @@ const bookingSlotLabel = (booking?: OccupancyBooking | null): string => {
 
 const normalizeDeskBookings = (desk: OccupancyDesk): NormalizedOccupancyBooking[] => {
   const bookings = desk.bookings && desk.bookings.length > 0 ? desk.bookings : desk.booking ? [desk.booking] : [];
+  if (desk.kind === 'RAUM') return normalizeDaySlotBookingsPerEntry(bookings);
   return normalizeDaySlotBookings(bookings);
 };
 
