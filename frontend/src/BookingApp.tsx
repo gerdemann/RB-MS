@@ -67,6 +67,7 @@ type OccupancyResponse = { date: string; floorplanId: string; desks: OccupancyDe
 type BookingEmployee = { id: string; email: string; firstName?: string; displayName: string; photoUrl?: string };
 type OccupantForDay = { deskId: string; deskLabel: string; deskKindLabel: string; userId: string; name: string; firstName: string; email: string; employeeId?: string; photoUrl?: string };
 type BookingSubmitPayload = BookingFormSubmitPayload;
+type BookingMode = 'create' | 'manage';
 type BookingDialogState = 'IDLE' | 'BOOKING_OPEN' | 'SUBMITTING' | 'CONFLICT_REVIEW';
 type RebookConfirmState = {
   deskId: string;
@@ -1220,7 +1221,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     return popupMyBookings[0];
   }, [bookingFormValues.slot, popupDesk, popupMyBookings]);
   const hasUnexpectedMultipleMyBookings = popupMyBookings.length > 1;
-  const popupMode: 'create' | 'manage' = popupDesk && popupMyBookings.length > 0 ? 'manage' : 'create';
+  const popupMode: BookingMode = popupDesk && popupMyBookings.length > 0 ? 'manage' : 'create';
   const popupDeskState = popupDesk ? (popupDesk.isBookableForMe === false ? 'UNBOOKABLE' : !canBookDesk(popupDesk) ? 'TAKEN' : 'FREE') : null;
   const meEmployeeId = currentUser?.id;
   const selectedBooking = popupMySelectedBooking;
@@ -2603,7 +2604,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                 <section className="booking-detail-card stack-xs">
                   <h4>Buchungsdetails</h4>
                   <p><span className="muted">Datum</span><strong>{new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</strong></p>
-                  {popupMode === 'manage' && popupMySelectedBooking
+                  {popupMySelectedBooking
                     ? <p><span className="muted">Zeitraum</span><strong>{bookingSlotLabel(popupMySelectedBooking)}</strong></p>
                     : !isRoomResource(popupDesk) && <p><span className="muted">Status</span><strong>{popupDeskState === 'UNBOOKABLE' ? 'Für deinen Mandanten nicht buchbar' : deskAvailabilityLabel(popupDeskAvailability)}</strong></p>}
                   {popupDeskState === 'UNBOOKABLE' && <p className="muted">Für deinen Mandanten nicht buchbar.</p>}
