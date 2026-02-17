@@ -10,18 +10,18 @@ type RoomOccupancyBooking = {
 export type RoomBusySegment = RingSegment & { tone: 'own' | 'other' };
 
 const HHMM_PATTERN = /^\d{2}:\d{2}$/;
-
-const toLocalDateKey = (value: Date): string => {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, '0');
-  const day = String(value.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-};
+const TIMESTAMP_TIME_PATTERN = /T(\d{2}):(\d{2})/;
 
 const parseMinutes = (value?: string | null): number | null => {
   if (!value) return null;
   if (HHMM_PATTERN.test(value)) {
     const parsed = toMinutes(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  const timestampMatch = TIMESTAMP_TIME_PATTERN.exec(value);
+  if (timestampMatch) {
+    const parsed = toMinutes(`${timestampMatch[1]}:${timestampMatch[2]}`);
     return Number.isFinite(parsed) ? parsed : null;
   }
 
@@ -36,9 +36,13 @@ const bookingBelongsToDay = (booking: RoomOccupancyBooking, day?: string): boole
   if (booking.date) return booking.date.slice(0, 10) === day;
 
   if (!booking.startTime || HHMM_PATTERN.test(booking.startTime)) return true;
+
+  const isoDatePrefix = booking.startTime.slice(0, 10);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(isoDatePrefix)) return isoDatePrefix === day;
+
   const parsed = new Date(booking.startTime);
   if (Number.isNaN(parsed.getTime())) return true;
-  return toLocalDateKey(parsed) === day;
+  return parsed.toISOString().slice(0, 10) === day;
 };
 
 export type RoomOccupancyMetrics = {
