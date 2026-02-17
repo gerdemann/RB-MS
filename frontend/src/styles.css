@@ -485,6 +485,10 @@ tr{cursor:pointer}.row-selected{background:hsl(var(--muted))}
 .booking-editor-form-section{min-width:0}
 .booking-editor-plan-section{min-width:0;overflow:hidden}
 .booking-editor-plan{min-width:0}
+.booking-editor-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(380px,.8fr);gap:16px;align-items:start}
+.booking-editor-form-section{position:relative;z-index:2;min-width:0}
+.booking-editor-plan-section{position:relative;min-width:0;overflow:hidden}
+.booking-editor-plan{position:relative;z-index:1}
 .booking-editor-plan .canvas-body{min-height:420px}
 .booking-editor-canvas{height:min(58vh,560px)}
 .booking-editor-canvas .floorplan-canvas{height:100%}
