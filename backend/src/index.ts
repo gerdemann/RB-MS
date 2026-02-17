@@ -3191,6 +3191,8 @@ app.get('/occupancy', async (req, res) => {
       userEmail: booking.userEmail,
       bookedFor: booking.bookedFor,
       guestName: booking.guestName,
+      recurringBookingId: booking.recurringBookingId,
+      recurringGroupId: booking.recurringGroupId,
       createdBy: booking.createdByEmployee,
       createdByUserId: booking.createdByEmployeeId,
       createdByEmployeeId: booking.createdByEmployeeId,
