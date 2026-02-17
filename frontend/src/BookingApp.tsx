@@ -2658,8 +2658,18 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       closePopup();
     };
 
-    const closeOnViewportChange = () => {
+    const isPopupRelatedEventTarget = (target: EventTarget | null) => {
+      if (!(target instanceof Node)) return false;
+      if (popupRef.current?.contains(target)) return true;
+      if (cancelDialogRef.current?.contains(target)) return true;
+      if (recurringConflictDialogRef.current?.contains(target)) return true;
+      if (rebookDialogRef.current?.contains(target)) return true;
+      return false;
+    };
+
+    const closeOnViewportChange = (event: Event) => {
       if (cancelFlowState === 'CANCEL_CONFIRM_OPEN') return;
+      if (isPopupRelatedEventTarget(event.target)) return;
       closePopup();
     };
 
