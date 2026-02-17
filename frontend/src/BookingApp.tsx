@@ -8,7 +8,6 @@ import { Avatar } from './components/Avatar';
 import { BookingForm, createDefaultBookingFormValues } from './components/BookingForm';
 import type { BookingFormSubmitPayload, BookingFormValues } from './components/BookingForm';
 import { UserMenu } from './components/UserMenu';
-import { FloatingPanel } from './components/ui/FloatingPanel';
 import { FloorplanCanvas } from './FloorplanCanvas';
 import { APP_TITLE, APP_VERSION, COMPANY_LOGO_URL } from './config';
 import type { AuthUser } from './auth/AuthProvider';
@@ -1657,7 +1656,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     setCancelFlowState('DESK_POPOVER_OPEN');
   };
 
-  const submitPopupBooking = async (deskId: string, payload: BookingSubmitPayload, options?: { overwrite?: boolean; explicitDates?: string[]; conflictStrategy?: 'abort' | 'ignore' | 'reschedule'; suppressSuccessToast?: boolean }): Promise<BulkBookingResponse | void> => {
+  const submitPopupBooking = async (deskId: string, payload: BookingSubmitPayload, options?: { overwrite?: boolean; explicitDates?: string[]; conflictResolution?: 'BOOK_ONLY_FREE' | 'REBOOK_CONFLICTS_AND_BOOK_FREE'; suppressSuccessToast?: boolean }): Promise<BulkBookingResponse | void> => {
     if (!selectedEmployeeEmail) {
       throw new Error('Bitte Mitarbeiter auswählen.');
     }
@@ -1697,7 +1696,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
       startTime: isRoomRecurring ? payload.startTime : null,
       endTime: isRoomRecurring ? payload.endTime : null,
       overwrite: options?.overwrite ?? false,
-      conflictStrategy: options?.conflictStrategy,
+      conflictResolution: options?.conflictResolution,
       explicitDates: options?.explicitDates
     };
 
@@ -1769,7 +1768,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     setDialogErrorMessage('');
     try {
       const result = await submitPopupBooking(popupDesk.id, recurringConflictState.payload, {
-        conflictStrategy: 'reschedule',
+        conflictResolution: 'REBOOK_CONFLICTS_AND_BOOK_FREE',
         suppressSuccessToast: true
       });
       await reloadBookings();
@@ -1792,7 +1791,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
     setIsResolvingRecurringConflict(true);
     try {
       const result = await submitPopupBooking(popupDesk.id, recurringConflictState.payload, {
-        conflictStrategy: 'ignore',
+        conflictResolution: 'BOOK_ONLY_FREE',
         suppressSuccessToast: true
       });
       await reloadBookings();
@@ -1868,7 +1867,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
             return;
           }
         }
-        await submitPopupBooking(popupDesk.id, payload, { overwrite: false, conflictStrategy: payload.type === 'recurring' ? 'abort' : undefined });
+        await submitPopupBooking(popupDesk.id, payload, { overwrite: false });
       }
       const refreshed = await reloadBookings(isRoomCreate ? { requestId, roomId: popupDesk.id, date: payload.date } : undefined);
       if (!refreshed) {
@@ -1942,6 +1941,23 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
           ? `Serienbuchung überschreitet das Maximum von ${max} Terminen (berechnet: ${count}).`
           : `Serienbuchung überschreitet das Maximum von ${max} Terminen.`));
         return;
+      }
+
+      if (payload.type === 'recurring' && error instanceof ApiError && error.backendCode === 'SERIES_CONFLICT') {
+        const details = (typeof error.details === 'object' && error.details !== null ? error.details : null) as { conflictDates?: unknown } | null;
+        const conflictDates = Array.isArray(details?.conflictDates)
+          ? details.conflictDates.filter((value): value is string => typeof value === 'string')
+          : [];
+        if (conflictDates.length > 0) {
+          setRecurringConflictState({
+            payload,
+            conflictDates,
+            freeDates: []
+          });
+          setBookingDialogState('BOOKING_OPEN');
+          setDialogErrorMessage('');
+          return;
+        }
       }
 
       setBookingDialogState('BOOKING_OPEN');
@@ -2486,20 +2502,14 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
         <aside className="right-col">{isBootstrapping ? <div className="card skeleton h-480" /> : dayOverviewPanel}</aside>
       </section>
 
-      {deskPopup && popupDesk && popupDeskState && cancelFlowState !== 'CANCEL_CONFIRM_OPEN' && (
-        <FloatingPanel
-          open
-          onClose={closeBookingFlow}
-          anchorElement={deskAnchorElementsRef.current.get(deskPopup.deskId) ?? null}
-          anchorRect={deskPopup.anchorRect}
-          className="card desk-popup"
-          repositionKey={`${bookingFormValues.type}-${bookingDialogState}-${popupDeskState}`}
-        >
+      {deskPopup && popupDesk && popupDeskState && cancelFlowState !== 'CANCEL_CONFIRM_OPEN' && createPortal(
+        <div className="desk-popup-overlay" role="presentation">
+          <section className="card desk-popup" role="dialog" aria-modal="true" aria-labelledby="booking-panel-title">
           {popupMode === 'create' || isRoomResource(popupDesk) ? (
             <>
               <div className="desk-popup-header">
                 <div className="stack-xxs">
-                  <h3>{resourceKindLabel(popupDesk.kind)}: {popupDesk.name}</h3>
+                  <h3 id="booking-panel-title">{resourceKindLabel(popupDesk.kind)}: {popupDesk.name}</h3>
                   <p className="muted">{popupMode === 'manage' ? 'Deine Buchungen verwalten' : 'Buchung anlegen'}{!isRoomResource(popupDesk) ? ` · ${deskAvailabilityLabel(popupDeskAvailability)}` : ''}</p>
                 </div>
                 <button type="button" className="btn btn-ghost desk-popup-close" aria-label="Popover schließen" onClick={closeBookingFlow} disabled={isCancellingBooking}>✕</button>
@@ -2556,7 +2566,10 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
             </>
           ) : (
             <>
-              <h3>{resourceKindLabel(popupDesk.kind)}: {popupDesk.name}</h3>
+              <div className="desk-popup-header">
+                <h3 id="booking-panel-title">{resourceKindLabel(popupDesk.kind)}: {popupDesk.name}</h3>
+                <button type="button" className="btn btn-ghost desk-popup-close" aria-label="Popover schließen" onClick={closeBookingFlow} disabled={isCancellingBooking}>✕</button>
+              </div>
               <div className="stack-sm desk-popup-body">
                 <p className="muted">Datum: {new Date(`${selectedDate}T00:00:00.000Z`).toLocaleDateString('de-DE')}</p>
                 {popupMode === 'manage' && popupMySelectedBooking
@@ -2617,7 +2630,9 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
               </div>
             </>
           )}
-        </FloatingPanel>
+          </section>
+        </div>,
+        document.body
       )}
 
       {cancelFlowState === 'CANCEL_CONFIRM_OPEN' && cancelConfirmDesk && createPortal(
@@ -2631,7 +2646,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
             onMouseDown={(event) => { event.stopPropagation(); }}
             onClick={(event) => { event.stopPropagation(); }}
           >
-            <h3 id="cancel-booking-title">{cancelConfirmIsSeries ? 'Serienbuchung stornieren' : 'Buchung stornieren?'}</h3>
+            <h3 id="cancel-booking-title">{cancelConfirmIsSeries ? 'Serienbuchung löschen' : 'Buchung stornieren?'}</h3>
             {cancelConfirmIsSeries
               ? <p>Dieser Termin gehört zu einer Serienbuchung. Was möchtest du stornieren?</p>
               : <p>Möchtest du deine Buchung {cancelConfirmBookingLabel} stornieren?</p>}
@@ -2651,11 +2666,11 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
               <button type="button" className="btn btn-outline" onMouseDown={(event) => { event.stopPropagation(); }} onClick={cancelCancelConfirm} disabled={isCancellingBooking} data-state={isCancellingBooking ? 'loading' : 'idle'}>Abbrechen</button>
               {cancelConfirmIsSeries && (
                 <button type="button" className="btn btn-danger" onMouseDown={(event) => { event.stopPropagation(); }} onClick={(event) => void submitPopupCancel(event, 'SERIES_ALL')} disabled={isCancellingBooking} data-state={isCancellingBooking ? 'loading' : 'idle'}>
-                  {isCancellingBooking && cancellingBookingId === cancelConfirmContext?.bookingIds[0] ? <><span className="btn-spinner" aria-hidden />Stornieren…</> : 'Ganze Serie stornieren'}
+                  {isCancellingBooking && cancellingBookingId === cancelConfirmContext?.bookingIds[0] ? <><span className="btn-spinner" aria-hidden />Löschen…</> : 'Ganze Serie löschen'}
                 </button>
               )}
               <button type="button" className="btn btn-danger" onMouseDown={(event) => { event.stopPropagation(); }} onClick={(event) => void submitPopupCancel(event, 'SINGLE')} disabled={isCancellingBooking} data-state={isCancellingBooking ? 'loading' : 'idle'}>
-                {isCancellingBooking && cancellingBookingId === cancelConfirmContext?.bookingIds[0] ? <><span className="btn-spinner" aria-hidden />Stornieren…</> : (cancelConfirmIsSeries ? 'Nur diesen Termin stornieren' : 'Stornieren')}
+                {isCancellingBooking && cancellingBookingId === cancelConfirmContext?.bookingIds[0] ? <><span className="btn-spinner" aria-hidden />Löschen…</> : (cancelConfirmIsSeries ? 'Einzelne Buchung löschen' : 'Stornieren')}
               </button>
             </div>
           </section>
@@ -2672,27 +2687,8 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
               <button type="button" className="btn btn-outline btn-icon" onClick={() => setRecurringConflictState(null)} disabled={isResolvingRecurringConflict} aria-label="Konflikt-Dialog schließen">✕</button>
             </header>
             <div className="recurring-conflict-body stack-sm">
-              <p><strong>{recurringConflictState.conflictDates.length} Konflikte</strong>: Ressource an diesen Tagen bereits belegt.</p>
-              <div className="recurring-conflict-table-wrap">
-                <table className="admin-table recurring-conflict-table">
-                  <thead>
-                    <tr>
-                      <th>Datum</th>
-                      <th>Grund</th>
-                      <th>Aktion</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {recurringConflictState.conflictDates.map((date) => (
-                      <tr key={date}>
-                        <td>{new Date(`${date}T00:00:00.000Z`).toLocaleDateString('de-DE')}</td>
-                        <td>Ressource belegt</td>
-                        <td>Überspringen oder umbuchen</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <p>Es gibt Konflikte innerhalb der Serie (z.B. Ressource bereits belegt oder du hast an manchen Tagen bereits eine Ressource dieses Typs gebucht). Wähle, wie wir mit allen Konflikttagen umgehen sollen.</p>
+              <p><strong>Konflikttage: {recurringConflictState.conflictDates.length}</strong></p>
               {dialogErrorMessage && <p className="error-banner">{dialogErrorMessage}</p>}
             </div>
             <footer className="recurring-conflict-footer inline-end rebook-actions">
@@ -2702,7 +2698,7 @@ export function BookingApp({ onOpenAdmin, canOpenAdmin, currentUserEmail, onLogo
                 <span className="muted">Ändert nichts an bestehenden Buchungen.</span>
               </div>
               <div className="stack-xxs">
-                <button type="button" className="btn btn-danger" onClick={() => void runRecurringReassign()} disabled={isResolvingRecurringConflict}>Umbuchen</button>
+                <button type="button" className="btn btn-danger" onClick={() => void runRecurringReassign()} disabled={isResolvingRecurringConflict}>Umbuchen und freie Termine buchen</button>
                 <span className="muted">Ändert bestehende eigene Buchungen an Konflikttagen.</span>
               </div>
             </footer>
