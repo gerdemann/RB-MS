@@ -1,3 +1,16 @@
+# Root-level Dockerfile for unified Frontend + Backend deployment
+# 
+# This Dockerfile builds both frontend and backend into a single image.
+# The backend serves the frontend static files via Express.
+# 
+# Use cases:
+# - Docker Compose local development (docker-compose.yml)
+# - GitHub Container Registry (GHCR) via GitHub Actions
+# - Simple single-container deployments
+#
+# Note: For Render.com deployment, see backend/Dockerfile which builds
+# only the backend (frontend is deployed separately as a static site).
+
 # Build frontend
 FROM node:20-slim AS frontend-build
 WORKDIR /app/frontend

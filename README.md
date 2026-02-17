@@ -6,6 +6,24 @@
 
 ## Docker Setup
 
+Das Projekt enthält **zwei verschiedene Dockerfiles** für unterschiedliche Deployment-Szenarien:
+
+### 1. Root-level Dockerfile (`/Dockerfile`)
+**Zweck**: Lokales Development und Docker Compose Deployment mit Frontend + Backend in einem Image
+
+Das Root-Dockerfile baut Frontend und Backend zusammen in ein einzelnes Image:
+- Backend dient als Server für API und Frontend-Dateien
+- Ideal für Docker Compose, lokales Testing und einfache Deployments
+- Verwendet von GitHub Actions für GHCR (GitHub Container Registry)
+
+### 2. Backend Dockerfile (`/backend/Dockerfile`)
+**Zweck**: Render.com Deployment (nur Backend, Frontend separat als Static Site)
+
+Das Backend-Dockerfile baut nur den Backend-Service:
+- Wird von Render.com für das Backend Web Service verwendet (siehe `render.yaml`)
+- Frontend wird separat als Static Site deployed
+- Optimiert für Render's Multi-Service Architektur
+
 ### Lokales Deployment mit Docker Compose
 
 Das Projekt kann lokal mit Docker Compose gestartet werden:
@@ -25,10 +43,14 @@ Die Anwendung ist dann verfügbar unter: `http://localhost:3000`
 ### Docker Image bauen
 
 ```bash
+# Mit Root-Dockerfile (Frontend + Backend)
 docker build -t rbms:latest .
+
+# Nur Backend (für Render-kompatibles Deployment)
+docker build -t rbms-backend:latest -f backend/Dockerfile backend/
 ```
 
-Das Image enthält:
+Das Root-Image enthält:
 - Frontend (Vite Build) als statische Dateien
 - Backend (Express Server) der sowohl API als auch Frontend ausliefert
 - Prisma Client und Migrationen
