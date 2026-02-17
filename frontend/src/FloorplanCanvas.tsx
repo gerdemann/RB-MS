@@ -151,7 +151,7 @@ const DeskOverlay = memo(function DeskOverlay({ markers, selectedDeskId, hovered
           const isInteracting = selectedDeskId === desk.id || hoveredDeskId === desk.id || Boolean(desk.isSelected);
           const isOccupiedByOthers = amBooking && pmBooking && !bookings.some((booking) => booking.isCurrentUser);
           const isTenantBlocked = desk.isBookableForMe === false;
-          const isClickable = isTenantBlocked ? true : !isOccupiedByOthers;
+          const isClickable = isRoom ? true : (isTenantBlocked ? true : !isOccupiedByOthers);
           const centerBooking = fullBooking ?? bookings[0];
           const initials = getInitials(centerBooking?.userDisplayName, centerBooking?.userEmail ?? undefined);
           const hasPhoto = Boolean(centerBooking?.userPhotoUrl);
