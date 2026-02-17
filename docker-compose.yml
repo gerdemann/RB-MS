@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: rbms-postgres
+    environment:
+      POSTGRES_DB: rbms
+      POSTGRES_USER: rbms
+      POSTGRES_PASSWORD: rbms_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rbms"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rbms-app
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://rbms:rbms_password@postgres:5432/rbms
+      JWT_SECRET: REPLACE_WITH_SECURE_RANDOM_STRING
+      ADMIN_EMAIL: REPLACE_WITH_YOUR_ADMIN_EMAIL
+      ADMIN_PASSWORD: REPLACE_WITH_SECURE_PASSWORD
+      APP_TITLE: RB-MS
+      PORT: 3000
+      RUN_SEED: "false"
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:

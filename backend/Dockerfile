@@ -1,5 +1,14 @@
 # syntax=docker/dockerfile:1.7
 
+# Backend-only Dockerfile for Render.com deployment
+#
+# This Dockerfile builds ONLY the backend service.
+# Used by Render.com where frontend is deployed separately as a static site.
+# See render.yaml for the complete Render deployment configuration.
+#
+# Note: For unified frontend+backend Docker deployments (e.g., Docker Compose),
+# see the root-level Dockerfile which combines both services.
+
 FROM node:20-alpine AS deps
 WORKDIR /app
 
