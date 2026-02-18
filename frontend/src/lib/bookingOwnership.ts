@@ -1,7 +1,10 @@
 export type BookingOwnershipInput = {
   bookedFor?: 'SELF' | 'GUEST';
   employeeId?: string | null;
+  userId?: string | null;
   createdByEmployeeId?: string | null;
+  createdByUserId?: string | null;
+  isCurrentUser?: boolean;
   guestName?: string | null;
   userDisplayName?: string | null;
   userEmail?: string | null;
@@ -10,8 +13,16 @@ export type BookingOwnershipInput = {
 
 export const isMineBooking = (booking: BookingOwnershipInput, meEmployeeId?: string | null): boolean => {
   if (!meEmployeeId) return false;
-  if (booking.bookedFor === 'SELF') return booking.employeeId === meEmployeeId;
-  if (booking.bookedFor === 'GUEST') return booking.createdByEmployeeId === meEmployeeId;
+  const ownBookingMatch = booking.employeeId === meEmployeeId || booking.userId === meEmployeeId;
+  const guestBookingMatch = booking.createdByEmployeeId === meEmployeeId || booking.createdByUserId === meEmployeeId;
+
+  if (booking.bookedFor === 'SELF') return ownBookingMatch;
+  if (booking.bookedFor === 'GUEST') return guestBookingMatch;
+
+  if (booking.isCurrentUser) return true;
+  if (guestBookingMatch) return true;
+  if (ownBookingMatch) return true;
+
   return false;
 };
 
